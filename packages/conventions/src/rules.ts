@@ -304,3 +304,23 @@ export const checkTag = (conventions: Conventions, name: string): string[] =>
     new RegExp(conventions.tag.pattern, "u").test(name)
         ? []
         : [`tag は v を付けた semver にする。例: ${conventions.tag.example}: ${name}`]
+
+// 説明に中身があるかを AI に判定させるときの指示。type と scope は規則の検査がファイルから確かめるので、
+// AI には件名の説明の部分だけを渡し、具体的な変更が書かれているかだけを判定させる
+export const semanticLintPrompt = (message: string): string => {
+    const subject = message.split("\n")[0] ?? ""
+    const description = subject.match(/^[a-z]+(\([^)]*\))?: (.+)$/)?.[2] ?? subject
+    return [
+        "You are a strict commit message linter. Respond with ONLY 'PASS' or 'FAIL: reason in Japanese'.",
+        "",
+        "You receive only the description part of a commit subject. The type and scope were already checked by other rules, so do not judge them, and do not mention them in your reason.",
+        "",
+        "Rules:",
+        "- The description MUST clearly describe a specific change (what was changed and/or why)",
+        "- FAIL if the description is meaningless, nonsensical, placeholder-like, or does not describe an actual change",
+        "- FAIL examples: 'a', 'test', 'update', 'changes', 'main の変更を取り込む'",
+        "- PASS examples: 'チームの親を宣言の順に作る', '命名規則を追加する', 'Environment を消す準備として protect を外せるようにする'",
+        "",
+        `Description: ${description}`,
+    ].join("\n")
+}
