@@ -220,6 +220,32 @@ describe("mergePullRequest", () => {
 
 })
 
+describe("必須の検査が決まっていないリポジトリ", () => {
+    const without_required = (runs: { name: string, status: string, conclusion: string | null }[], workflows: { name: string, status: string, conclusion: string | null }[], statuses: { context: string, state: string }[] = []): Record<string, GitHubResponse> => ({
+        [`GET ${repo}/rules/branches/main`]: { status: 200, body: [] },
+        [`GET ${repo}/commits/head-sha/check-runs?per_page=100&page=1`]: { status: 200, body: { check_runs: runs.map((run) => ({ ...run, app: { id: 15368 } })) } },
+        [`GET ${repo}/commits/head-sha/status`]: { status: 200, body: { statuses } },
+        [`GET ${repo}/actions/runs?head_sha=head-sha&per_page=100`]: { status: 200, body: { workflow_runs: workflows } },
+    })
+
+    it("CI がまだ終わっていなければマージしない", async () => {
+        const fake = createFakeGitHub(without_required([{ name: "verify", status: "in_progress", conclusion: null }], [{ name: "ci", status: "in_progress", conclusion: null }]))
+        const result = await mergePullRequest(fake.request, target)
+        assert.deepEqual(result, { status: "refused", reasons: ["検査 verify がまだ終わっていない", "workflow ci がまだ終わっていない"] })
+        assert.ok(!fake.calls.some((call) => call.method === "PUT" && call.path.endsWith("/merge-async")))
+    })
+
+    it("CI が失敗していればマージしない", async () => {
+        const fake = createFakeGitHub(without_required([{ name: "verify", status: "completed", conclusion: "failure" }], [], [{ context: "example-bot/conventions", state: "success" }]))
+        assert.deepEqual(await mergePullRequest(fake.request, target), { status: "refused", reasons: ["検査 verify が失敗している"] })
+    })
+
+    it("全部が通っていればマージを頼む", async () => {
+        const fake = createFakeGitHub(without_required([{ name: "verify", status: "completed", conclusion: "success" }], [{ name: "ci", status: "completed", conclusion: "success" }], [{ context: "example-bot/conventions", state: "success" }]))
+        assert.deepEqual(await mergePullRequest(fake.request, target), { status: "pending", uuid: "merge-uuid" })
+    })
+})
+
 describe("waitForMerge", () => {
     const pull_request = { owner: "example-org", repository: "app", number: 7 }
     const no_wait = async (): Promise<void> => {}
