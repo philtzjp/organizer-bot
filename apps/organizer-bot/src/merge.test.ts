@@ -2,8 +2,8 @@ import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { beforeEach, describe, it } from "node:test"
 import type { GitHubRequest, GitHubResponse } from "./github.ts"
-import { isMergeSynchronize, type WebhookEvent } from "./index.ts"
-import { advanceDefaultBranch, deleteRefusals, mergePullRequest, reportRefusal } from "./merge.ts"
+import { isMergedWithLabel, type WebhookEvent } from "./index.ts"
+import { deleteRefusals, mergePullRequest, reportRefusal, waitForMerge } from "./merge.ts"
 
 const conventions_yml = readFileSync(new URL("../../../packages/conventions/fixtures/conventions.yml", import.meta.url), "utf8")
 const repo = "/repos/example-org/app"
@@ -65,15 +65,8 @@ const createFakeGitHub = (overrides: Record<string, GitHubResponse> = {}): { req
         [`GET ${repo}/contents/.github/conventions.yml`]: { status: 200, body: conventions_yml },
         ["GET /orgs/example-org/memberships/bob"]: { status: 200, body: { role: "member", state: "active" } },
         ["GET /orgs/example-org/memberships/alice"]: { status: 200, body: { role: "admin", state: "active" } },
-        ["GET /users/alice"]: { status: 200, body: { id: 1234, login: "alice", name: "Alice Example" } },
-        [`GET ${repo}/git/commits/head-sha`]: { status: 200, body: { tree: { sha: "tree-sha" } } },
-        [`POST ${repo}/git/commits`]: { status: 201, body: { sha: "squash-sha" } },
-        [`GET ${repo}/git/commits/squash-sha`]: { status: 200, body: {
-            committer: { email: "100000001+example-bot[bot]@users.noreply.github.com" },
-            parents: [{ sha: "base-sha" }],
-        } },
-        [`PATCH ${repo}/git/refs/heads/docs%2F7-naming`]: { status: 200, body: {} },
-        [`PATCH ${repo}/git/refs/heads/main`]: { status: 200, body: {} },
+        [`PUT ${repo}/pulls/7/merge-async`]: { status: 202, body: { status: "pending", details: { uuid: "merge-uuid" } } },
+        [`GET ${repo}/pulls/7/merge-async/merge-uuid`]: { status: 200, body: { status: "merged", sha: "merge-sha" } },
         [`POST ${repo}/issues/7/comments`]: { status: 201, body: {} },
         [`GET ${repo}/issues/7/comments?per_page=100&page=1`]: { status: 200, body: [] },
         [`DELETE ${repo}/issues/7/labels/merge`]: { status: 200, body: [] },
@@ -103,33 +96,44 @@ describe("mergePullRequest", () => {
         fake = createFakeGitHub()
     })
 
-    it("決定どおりの squash のコミットを作る", async () => {
+    it("決めた件名で squash のマージを GitHub に頼む", async () => {
         const result = await mergePullRequest(fake.request, target)
-        assert.deepEqual(result, { pushed: true, sha: "squash-sha" })
-        const created = fake.calls.find((call) => call.method === "POST" && call.path.endsWith("/git/commits"))
-        assert.deepEqual(created?.body, {
-            message: "merge(docs): 命名規則を追加する",
-            tree: "tree-sha",
-            parents: ["base-sha"],
-            author: { name: "Alice Example", email: "1234+alice@users.noreply.github.com" },
-            committer: { name: "example-bot[bot]", email: "100000001+example-bot[bot]@users.noreply.github.com" },
+        assert.deepEqual(result, { status: "pending", uuid: "merge-uuid" })
+        const requested = fake.calls.find((call) => call.method === "PUT" && call.path.endsWith("/merge-async"))
+        assert.deepEqual(requested?.body, {
+            merge_method: "squash",
+            merge_action: "direct_merge",
+            commit_title: "merge(docs): 命名規則を追加する",
+            commit_message: "",
+            sha: "head-sha",
+            bypass_rules: true,
         })
     })
 
-    it("件名に #N も Co-authored-by も付けない", async () => {
+    it("件名に #N も Co-authored-by も付けず、本文を空にする", async () => {
         await mergePullRequest(fake.request, target)
-        const created = fake.calls.find((call) => call.method === "POST" && call.path.endsWith("/git/commits"))
-        const message = (created?.body as { message: string }).message
-        assert.ok(!/#\d+/.test(message))
-        assert.ok(!/co-authored-by/i.test(message))
+        const requested = fake.calls.find((call) => call.method === "PUT" && call.path.endsWith("/merge-async"))
+        const body = requested?.body as { commit_title: string, commit_message: string }
+        assert.ok(!/#\d+/.test(body.commit_title))
+        assert.ok(!/co-authored-by/i.test(body.commit_title))
+        assert.equal(body.commit_message, "")
     })
 
-    it("PR のブランチだけを進め、main は進めない", async () => {
+    it("ブランチも main も自分では書き換えない", async () => {
         await mergePullRequest(fake.request, target)
-        const updates = fake.calls.filter((call) => call.method === "PATCH")
-        assert.deepEqual(updates.map((call) => [call.path, call.body]), [
-            [`${repo}/git/refs/heads/docs%2F7-naming`, { sha: "squash-sha", force: true }],
-        ])
+        assert.ok(!fake.calls.some((call) => call.method === "PATCH" || (call.method === "POST" && call.path.includes("/git/"))))
+    })
+
+    it("GitHub がすぐにマージしたら、マージ済みと返す", async () => {
+        fake = createFakeGitHub({ [`PUT ${repo}/pulls/7/merge-async`]: { status: 200, body: { status: "merged", sha: "merge-sha" } } })
+        assert.deepEqual(await mergePullRequest(fake.request, target), { status: "merged", sha: "merge-sha" })
+    })
+
+    it("GitHub が受け付けなければ、理由を返す", async () => {
+        fake = createFakeGitHub({ [`PUT ${repo}/pulls/7/merge-async`]: { status: 400, body: { status: "failed", details: { message: "Pull request is in a draft state" } } } })
+        const result = await mergePullRequest(fake.request, target)
+        assert.equal(result.status, "refused")
+        assert.ok(result.status === "refused" && result.reasons[0]!.includes("draft"))
     })
 
     it("複数のディレクトリにまたがる PR は repo を scope にする", async () => {
@@ -137,8 +141,8 @@ describe("mergePullRequest", () => {
             [`GET ${repo}/pulls/7/files?per_page=100&page=1`]: { status: 200, body: [{ filename: "docs/naming.md" }, { filename: "README.md" }] },
         })
         await mergePullRequest(fake.request, target)
-        const created = fake.calls.find((call) => call.method === "POST" && call.path.endsWith("/git/commits"))
-        assert.equal((created?.body as { message: string }).message, "merge(repo): 命名規則を追加する")
+        const requested = fake.calls.find((call) => call.method === "PUT" && call.path.endsWith("/merge-async"))
+        assert.equal((requested?.body as { commit_title: string }).commit_title, "merge(repo): 命名規則を追加する")
     })
 
     it("規約のファイルがないリポジトリでは組織の正本を使う", async () => {
@@ -147,47 +151,47 @@ describe("mergePullRequest", () => {
             ["GET /repos/example-org/.github/contents/conventions.yml"]: { status: 200, body: conventions_yml },
         })
         const result = await mergePullRequest(fake.request, target)
-        assert.equal(result.pushed, true)
+        assert.equal(result.status, "pending")
     })
 
     it("本文が規約に合っていない PR はマージしない", async () => {
         fake = createFakeGitHub(withPullRequest({ body: "説明だけの本文" }))
         const result = await mergePullRequest(fake.request, target)
-        assert.equal(result.pushed, false)
-        assert.ok(!fake.calls.some((call) => call.method === "POST" && call.path.endsWith("/git/commits")))
+        assert.equal(result.status, "refused")
+        assert.ok(!fake.calls.some((call) => call.method === "PUT" && call.path.endsWith("/merge-async")))
     })
 
     it("Draft の PR はマージしない", async () => {
         fake = createFakeGitHub(withPullRequest({ draft: true }))
         const result = await mergePullRequest(fake.request, target)
-        assert.equal(result.pushed, false)
+        assert.equal(result.status, "refused")
         assert.ok(!fake.calls.some((call) => call.method === "PATCH"))
     })
 
     it("fork からの PR はマージしない", async () => {
         fake = createFakeGitHub(withPullRequest({ head: { ref: "x", sha: "head-sha", repo: { full_name: "someone/hp" } } }))
         const result = await mergePullRequest(fake.request, target)
-        assert.equal(result.pushed, false)
+        assert.equal(result.status, "refused")
     })
 
     it("タイトルの形が違う PR はマージしない", async () => {
         fake = createFakeGitHub(withPullRequest({ title: "命名規則を追加する" }))
         const result = await mergePullRequest(fake.request, target)
-        assert.equal(result.pushed, false)
+        assert.equal(result.status, "refused")
     })
 
     it("PR の head がブランチの先頭に追いついていなければマージしない", async () => {
         const stale = createFakeGitHub({ [`GET ${repo}/git/ref/heads/docs%2F7-naming`]: { status: 200, body: { object: { sha: "newer-sha" } } } })
         const result = await mergePullRequest(stale.request, target)
-        assert.equal(result.pushed, false)
-        assert.ok(!result.pushed && result.reasons.some((reason) => reason.includes("ブランチの先頭")))
-        assert.ok(!stale.calls.some((call) => call.method === "POST" && call.path.endsWith("/git/commits")))
+        assert.equal(result.status, "refused")
+        assert.ok(result.status === "refused" && result.reasons.some((reason) => reason.includes("ブランチの先頭")))
+        assert.ok(!stale.calls.some((call) => call.method === "PUT" && call.path.endsWith("/merge-async")))
     })
 
     it("main に追いついていない PR はマージしない", async () => {
         fake = createFakeGitHub({ [`GET ${repo}/compare/base-sha...head-sha`]: { status: 200, body: { behind_by: 1, ahead_by: 2 } } })
         const result = await mergePullRequest(fake.request, target)
-        assert.deepEqual(result, { pushed: false, reasons: ["ブランチが main に追いついていない"] })
+        assert.deepEqual(result, { status: "refused", reasons: ["ブランチが main に追いついていない"] })
     })
 
     it("必須の検査が終わっていない PR はマージしない", async () => {
@@ -195,7 +199,7 @@ describe("mergePullRequest", () => {
             { name: "verify", status: "in_progress", conclusion: null, app: { id: 15368 } },
         ] } } })
         const result = await mergePullRequest(fake.request, target)
-        assert.deepEqual(result, { pushed: false, reasons: ["必須の検査 verify がまだ終わっていない"] })
+        assert.deepEqual(result, { status: "refused", reasons: ["必須の検査 verify がまだ終わっていない"] })
     })
 
     it("必須の検査が失敗している PR はマージしない", async () => {
@@ -203,7 +207,7 @@ describe("mergePullRequest", () => {
             { name: "verify", status: "completed", conclusion: "failure", app: { id: 15368 } },
         ] } } })
         const result = await mergePullRequest(fake.request, target)
-        assert.deepEqual(result, { pushed: false, reasons: ["必須の検査 verify が失敗している"] })
+        assert.deepEqual(result, { status: "refused", reasons: ["必須の検査 verify が失敗している"] })
     })
 
     it("別の App が出した同じ名前の検査は数えない", async () => {
@@ -211,79 +215,51 @@ describe("mergePullRequest", () => {
             { name: "verify", status: "completed", conclusion: "success", app: { id: 999 } },
         ] } } })
         const result = await mergePullRequest(fake.request, target)
-        assert.equal(result.pushed, false)
+        assert.equal(result.status, "refused")
     })
 
 })
 
-describe("advanceDefaultBranch", () => {
+describe("waitForMerge", () => {
     const pull_request = { owner: "example-org", repository: "app", number: 7 }
+    const no_wait = async (): Promise<void> => {}
 
-    it("ボットが作り、親が main の先頭のコミットなら、main を早送りで進める", async () => {
+    it("マージされたら、マージのコミットを返す", async () => {
         const fake = createFakeGitHub()
-        const result = await advanceDefaultBranch(fake.request, pull_request, "main", "squash-sha")
-        assert.deepEqual(result, { status: "advanced", sha: "squash-sha" })
-        const updates = fake.calls.filter((call) => call.method === "PATCH")
-        assert.deepEqual(updates.map((call) => [call.path, call.body]), [
-            [`${repo}/git/refs/heads/main`, { sha: "squash-sha", force: false }],
-        ])
+        assert.deepEqual(await waitForMerge(fake.request, pull_request, "merge-uuid", 3, no_wait), { status: "merged", sha: "merge-sha" })
     })
 
-    it("committer がボットでないコミットでは何もしない", async () => {
-        const fake = createFakeGitHub({ [`GET ${repo}/git/commits/squash-sha`]: { status: 200, body: {
-            committer: { email: "1234+alice@users.noreply.github.com" },
-            parents: [{ sha: "base-sha" }],
-        } } })
-        const result = await advanceDefaultBranch(fake.request, pull_request, "main", "squash-sha")
-        assert.deepEqual(result, { status: "ignored" })
-        assert.ok(!fake.calls.some((call) => call.method === "PATCH"))
+    it("失敗したら、理由を返す", async () => {
+        const fake = createFakeGitHub({ [`GET ${repo}/pulls/7/merge-async/merge-uuid`]: { status: 200, body: { status: "failed", details: { message: "Head branch was modified" } } } })
+        assert.deepEqual(await waitForMerge(fake.request, pull_request, "merge-uuid", 3, no_wait), { status: "failed", message: "Head branch was modified" })
     })
 
-    it("squash のコミットを作ったあとに main が進んでいたら、main を進めない", async () => {
-        const fake = createFakeGitHub({ [`GET ${repo}/git/ref/heads/main`]: { status: 200, body: { object: { sha: "newer-sha" } } } })
-        const result = await advanceDefaultBranch(fake.request, pull_request, "main", "squash-sha")
-        assert.equal(result.status, "refused")
-        assert.ok(!fake.calls.some((call) => call.method === "PATCH"))
-    })
-
-    it("main がすでに squash のコミットまで進んでいたら何もしない", async () => {
-        const fake = createFakeGitHub({ [`GET ${repo}/git/ref/heads/main`]: { status: 200, body: { object: { sha: "squash-sha" } } } })
-        const result = await advanceDefaultBranch(fake.request, pull_request, "main", "squash-sha")
-        assert.deepEqual(result, { status: "ignored" })
-        assert.ok(!fake.calls.some((call) => call.method === "PATCH"))
-    })
-
-    it("早送りできなかったら、進められなかったと返す", async () => {
-        const fake = createFakeGitHub({ [`PATCH ${repo}/git/refs/heads/main`]: { status: 422, body: { message: "Update is not a fast forward" } } })
-        const result = await advanceDefaultBranch(fake.request, pull_request, "main", "squash-sha")
-        assert.equal(result.status, "refused")
+    it("決めた回数で終わらなければ、まだ終わっていないと返す", async () => {
+        const fake = createFakeGitHub({ [`GET ${repo}/pulls/7/merge-async/merge-uuid`]: { status: 200, body: { status: "pending", details: { uuid: "merge-uuid" } } } })
+        assert.deepEqual(await waitForMerge(fake.request, pull_request, "merge-uuid", 3, no_wait), { status: "pending" })
+        assert.equal(fake.calls.filter((call) => call.path.endsWith("/merge-async/merge-uuid")).length, 3)
     })
 })
 
-describe("isMergeSynchronize", () => {
-    const event = (changes: Partial<WebhookEvent> = {}, labels = [{ name: "merge" }]): WebhookEvent => ({
-        action: "synchronize",
+describe("isMergedWithLabel", () => {
+    const event = (changes: Record<string, unknown>, labels = [{ name: "merge" }]): WebhookEvent => ({
+        action: "closed",
         installation: { id: 1 },
         sender: { login: "example-bot[bot]" },
         repository: { name: "app", owner: { login: "example-org" } },
-        pull_request: { number: 7, state: "open", title: "docs(docs): 命名規則を追加する", body: null, user: { login: "alice" }, head: { sha: "squash-sha" }, base: { ref: "main" }, labels },
-        ...changes,
+        pull_request: { number: 7, state: "closed", title: "t", body: null, user: { login: "alice" }, head: { sha: "head-sha" }, base: { ref: "main" }, labels, merged: true, ...changes },
     })
 
-    it("merge ラベルの付いた PR にボットが push したものを扱う", () => {
-        assert.equal(isMergeSynchronize("pull_request", event()), true)
+    it("merge ラベルの付いた PR がマージされたイベントを扱う", () => {
+        assert.equal(isMergedWithLabel("pull_request", event({})), true)
     })
 
-    it("人が push したものは扱わない", () => {
-        assert.equal(isMergeSynchronize("pull_request", event({ sender: { login: "alice" } })), false)
+    it("マージされずに閉じた PR は扱わない", () => {
+        assert.equal(isMergedWithLabel("pull_request", event({ merged: false })), false)
     })
 
     it("merge ラベルのない PR は扱わない", () => {
-        assert.equal(isMergeSynchronize("pull_request", event({}, [])), false)
-    })
-
-    it("synchronize でないイベントは扱わない", () => {
-        assert.equal(isMergeSynchronize("pull_request", event({ action: "labeled" })), false)
+        assert.equal(isMergedWithLabel("pull_request", event({}, [])), false)
     })
 })
 
@@ -354,7 +330,7 @@ describe("承認の条件", () => {
             { user: { login: "bob" }, state: "APPROVED", commit_id: "old-sha" },
         ]) })
         const result = await mergePullRequest(fake.request, target)
-        assert.equal(result.pushed, true)
+        assert.equal(result.status, "pending")
     })
 
     it("承認がなければマージしない", async () => {
@@ -362,7 +338,7 @@ describe("承認の条件", () => {
             { user: { login: "bob" }, state: "COMMENTED", commit_id: "head-sha" },
         ]) })
         const result = await mergePullRequest(fake.request, target)
-        assert.deepEqual(result, { pushed: false, reasons: ["承認が 1 件要るが、0 件しかない"] })
+        assert.deepEqual(result, { status: "refused", reasons: ["承認が 1 件要るが、0 件しかない"] })
     })
 
     it("PR を出した人の承認は数えない", async () => {
@@ -370,7 +346,7 @@ describe("承認の条件", () => {
             { user: { login: "alice" }, state: "APPROVED", commit_id: "head-sha" },
         ]) })
         const result = await mergePullRequest(fake.request, target)
-        assert.equal(result.pushed, false)
+        assert.equal(result.status, "refused")
     })
 
     it("承認のあとに変更要求を出した人の承認は数えない", async () => {
@@ -379,7 +355,7 @@ describe("承認の条件", () => {
             { user: { login: "bob" }, state: "CHANGES_REQUESTED", commit_id: "head-sha" },
         ]) })
         const result = await mergePullRequest(fake.request, target)
-        assert.equal(result.pushed, false)
+        assert.equal(result.status, "refused")
     })
 
     it("新しい push で古い承認を無効にするルールでは、古いコミットへの承認を数えない", async () => {
@@ -387,7 +363,7 @@ describe("承認の条件", () => {
             { user: { login: "bob" }, state: "APPROVED", commit_id: "old-sha" },
         ]) })
         const result = await mergePullRequest(fake.request, target)
-        assert.equal(result.pushed, false)
+        assert.equal(result.status, "refused")
     })
 })
 
@@ -402,14 +378,14 @@ describe("owner がラベルを付けた PR", () => {
     it("承認がなくてもマージする", async () => {
         const fake = createFakeGitHub(approval_rules)
         const result = await mergePullRequest(fake.request, { ...target, labeled_by: "alice" })
-        assert.equal(result.pushed, true)
+        assert.equal(result.status, "pending")
         assert.ok(!fake.calls.some((call) => call.path.includes("/reviews")))
     })
 
     it("owner でない人がラベルを付けたら承認を確かめる", async () => {
         const fake = createFakeGitHub({ ...approval_rules, [`GET ${repo}/pulls/7/reviews?per_page=100&page=1`]: { status: 200, body: [] } })
         const result = await mergePullRequest(fake.request, target)
-        assert.deepEqual(result, { pushed: false, reasons: ["承認が 1 件要るが、0 件しかない"] })
+        assert.deepEqual(result, { status: "refused", reasons: ["承認が 1 件要るが、0 件しかない"] })
     })
 
     it("owner がラベルを付けても、必須の検査が失敗していればマージしない", async () => {
@@ -417,7 +393,7 @@ describe("owner がラベルを付けた PR", () => {
             { name: "verify", status: "completed", conclusion: "failure", app: { id: 15368 } },
         ] } } })
         const result = await mergePullRequest(fake.request, { ...target, labeled_by: "alice" })
-        assert.equal(result.pushed, false)
+        assert.equal(result.status, "refused")
     })
 })
 

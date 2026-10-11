@@ -18,16 +18,17 @@ export type MergeRequest = PullRequestTarget & {
     labeled_by: string
 }
 
-// pushed は、squash のコミットまで PR のブランチを進めたこと。main は synchronize のイベントを受けてから進める
+// requested は、GitHub にマージを頼んだこと。merged ならマージ済み、pending なら GitHub が後でマージする
 export type MergeResult =
-    | { pushed: true, sha: string }
-    | { pushed: false, reasons: string[] }
-
-export type AdvanceResult =
-    | { status: "advanced", sha: string }
+    | { status: "merged", sha: string }
+    | { status: "pending", uuid: string }
     | { status: "refused", reasons: string[] }
-    // ボットが作った squash のコミットではないので、何もしない
-    | { status: "ignored" }
+
+// 頼んだマージの結果。pending のままなら、PR がマージされたイベントで片付ける
+export type AsyncMergeStatus =
+    | { status: "merged", sha: string }
+    | { status: "failed", message: string }
+    | { status: "pending" }
 
 type PullRequest = {
     state: string
@@ -151,7 +152,7 @@ export const mergePullRequest = async (request: GitHubRequest, target: MergeRequ
         reasons.push("PR が Draft のまま")
     }
     if (pull_request.head.repo?.full_name !== full_name) {
-        reasons.push("fork からの PR は bot がブランチを書き換えられない")
+        reasons.push("fork からの PR はマージしない")
     }
     if (pull_request.base.ref !== pull_request.base.repo.default_branch) {
         reasons.push(`マージ先が ${pull_request.base.repo.default_branch} ではない`)
@@ -163,7 +164,7 @@ export const mergePullRequest = async (request: GitHubRequest, target: MergeRequ
     const conventions = await readConventions(request, full_name)
     reasons.push(...findViolations(conventions, "pull_request", pull_request.title, pull_request.body ?? ""))
     if (reasons.length > 0) {
-        return { pushed: false, reasons }
+        return { status: "refused", reasons }
     }
 
     // PR が読まれたあとに main が進んでいることがあるので、main の先頭を読み直す
@@ -189,7 +190,7 @@ export const mergePullRequest = async (request: GitHubRequest, target: MergeRequ
         reasons.push(...await checkApprovals(request, full_name, pull_request.base.ref, target.number, pull_request.user.login, head_sha, rules))
     }
     if (reasons.length > 0) {
-        return { pushed: false, reasons }
+        return { status: "refused", reasons }
     }
 
     // scope は変更したファイルから決める。名前を変えたファイルは、元の場所も変更したものとして数える
@@ -197,49 +198,47 @@ export const mergePullRequest = async (request: GitHubRequest, target: MergeRequ
     const paths = files.flatMap((file) => file.previous_filename === undefined ? [file.filename] : [file.filename, file.previous_filename])
     const subject = `${conventions.commit.merge_type}(${allowedScope(conventions, paths)}): ${description}`
 
-    // author は PR を出した人の noreply アドレスにする。GitHub はこのアドレスでアカウントに紐づける
-    const author = expectOk(await request("GET", `/users/${encodeURIComponent(pull_request.user.login)}`), "PR を出した人を読む") as { id: number, login: string, name: string | null }
-    const head_commit = expectOk(await request("GET", `/repos/${full_name}/git/commits/${head_sha}`), "PR の先頭のコミットを読む") as { tree: { sha: string } }
-
-    // ブランチが main に追いついているので、PR の先頭のツリーがマージした結果になる。
-    // committer を書かないと、GitHub は author を committer にも使う。author と committer を分けると署名は付かない
-    const commit = expectOk(await request("POST", `/repos/${full_name}/git/commits`, {
-        message: subject,
-        tree: head_commit.tree.sha,
-        parents: [base_sha],
-        author: {
-            name: author.name ?? author.login,
-            email: `${author.id}+${author.login}@users.noreply.github.com`,
-        },
-        committer: botCommitter(),
-    }), "squash のコミットを作る") as { sha: string }
-
-    // PR のブランチの先頭と main の先頭を同じコミットにすると、GitHub は PR をマージ済みにする。
-    // PR の head の更新が GitHub に反映される前に main を進めるとクローズになるので、main は synchronize のイベントを受けてから進める
-    expectOk(await request("PATCH", `/repos/${full_name}/git/refs/heads/${encodeURIComponent(pull_request.head.ref)}`, { sha: commit.sha, force: true }), "PR のブランチを進める")
-    return { pushed: true, sha: commit.sha }
+    // GitHub にマージを頼む。ブランチは書き換えず、author は PR を出した人、committer は GitHub になる。
+    // 本文は空にし、GitHub が付ける (#N) と Co-authored-by を入れない。sha を渡すので、頼んだあとに push されたら GitHub が取り消す。
+    // bot はデフォルトブランチの ruleset の例外に入っているので、ruleset はすり抜ける。必須の検査と承認は、上で bot が確かめた
+    const response = await request("PUT", `/repos/${full_name}/pulls/${target.number}/merge-async`, {
+        merge_method: "squash",
+        merge_action: "direct_merge",
+        commit_title: subject,
+        commit_message: "",
+        sha: head_sha,
+        bypass_rules: true,
+    })
+    const body = response.body as { status?: string, sha?: string, details?: { uuid?: string, message?: string, sha?: string } } | undefined
+    if ((response.status === 200 || response.status === 202 || response.status === 409) && body?.status === "merged") {
+        return { status: "merged", sha: body.sha ?? body.details?.sha ?? "" }
+    }
+    if ((response.status === 202 || response.status === 409) && body?.details?.uuid !== undefined) {
+        return { status: "pending", uuid: body.details.uuid }
+    }
+    return { status: "refused", reasons: [`GitHub がマージを受け付けなかった: ${response.status} ${body?.details?.message ?? JSON.stringify(response.body)}`] }
 }
 
-// PR の head が、ボットが作り、親が main の先頭の squash のコミットなら、main をそこまで早送りで進める
-export const advanceDefaultBranch = async (request: GitHubRequest, target: PullRequestTarget, base_ref: string, head_sha: string): Promise<AdvanceResult> => {
+// 頼んだマージの結果を、決まった回数だけ問い合わせる。結果は GitHub に 24 時間残る
+export const waitForMerge = async (
+    request: GitHubRequest,
+    target: PullRequestTarget,
+    uuid: string,
+    attempts = 10,
+    wait = (milliseconds: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+): Promise<AsyncMergeStatus> => {
     const full_name = `${target.owner}/${target.repository}`
-    const head_commit = expectOk(await request("GET", `/repos/${full_name}/git/commits/${head_sha}`), "PR の先頭のコミットを読む") as { committer: { email: string }, parents: { sha: string }[] }
-    if (head_commit.committer.email !== botCommitter().email || head_commit.parents.length !== 1) {
-        return { status: "ignored" }
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+        const body = expectOk(await request("GET", `/repos/${full_name}/pulls/${target.number}/merge-async/${uuid}`), "マージの結果を読む") as { status: string, sha?: string, details?: { message?: string, sha?: string } }
+        if (body.status === "merged") {
+            return { status: "merged", sha: body.sha ?? body.details?.sha ?? "" }
+        }
+        if (body.status === "failed") {
+            return { status: "failed", message: body.details?.message ?? "理由はわからない" }
+        }
+        await wait(2000)
     }
-    const base = expectOk(await request("GET", `/repos/${full_name}/git/ref/heads/${encodeURIComponent(base_ref)}`), "main の先頭を読む") as { object: { sha: string } }
-    // 同じ synchronize が 2 回届くことがある。先に届いたもので main を進め終わっていれば、何もしない
-    if (base.object.sha === head_sha) {
-        return { status: "ignored" }
-    }
-    if (head_commit.parents[0]!.sha !== base.object.sha) {
-        return { status: "refused", reasons: [`squash のコミットを作ったあとに ${base_ref} が進んだ。ブランチを追いつかせてからラベルを付け直す`] }
-    }
-    const advanced = await request("PATCH", `/repos/${full_name}/git/refs/heads/${encodeURIComponent(base_ref)}`, { sha: head_sha, force: false })
-    if (advanced.status < 200 || advanced.status >= 300) {
-        return { status: "refused", reasons: [`${base_ref} を進められなかった。途中で ${base_ref} が進んだ可能性がある。ブランチを追いつかせてからラベルを付け直す`] }
-    }
-    return { status: "advanced", sha: head_sha }
+    return { status: "pending" }
 }
 
 // マージしなかった理由を PR に書き、ラベルを外す。ラベルを残すと、付け直しても合図にならないため

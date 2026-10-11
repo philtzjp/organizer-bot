@@ -1,8 +1,8 @@
 import { checkConventions, type CheckTarget } from "./check.ts"
 import { configure, config, splitRepository, type ConfigEnv } from "./config.ts"
 import { cleanFooters, type FooterTarget } from "./footers.ts"
-import { botCommitter, createInstallationRequest, createOrganizationRequest, type GitHubRequest } from "./github.ts"
-import { advanceDefaultBranch, deleteRefusals, merge_label, mergePullRequest, removeMergeLabel, reportRefusal, type MergeRequest, type PullRequestTarget } from "./merge.ts"
+import { createInstallationRequest, createOrganizationRequest, type GitHubRequest } from "./github.ts"
+import { deleteRefusals, merge_label, mergePullRequest, removeMergeLabel, reportRefusal, waitForMerge, type MergeRequest, type PullRequestTarget } from "./merge.ts"
 import { collectStats } from "./stats-collect.ts"
 import { publishFiles, stats_message } from "./stats-publish.ts"
 import { renderStats } from "./stats-render.ts"
@@ -36,6 +36,7 @@ export type WebhookEvent = {
         head: { sha: string }
         base: { ref: string }
         labels: { name: string }[]
+        merged?: boolean
     }
     issue?: { number: number, state: string, title: string, body: string | null, user: { login: string } }
     comment?: { id: number, body: string | null, user: { login: string } }
@@ -43,6 +44,19 @@ export type WebhookEvent = {
 
 // 受けるイベント。App の設定で、この 3 つを購読する
 export const handled_events = ["pull_request", "issues", "issue_comment"]
+
+// マージできたあとの片付け。ラベルと、前に断ったコメントを消す。消せなくてもほかの処理は止めない
+const finishMerge = async (request: GitHubRequest, target: PullRequestTarget): Promise<void> => {
+    await removeMergeLabel(request, target).catch((error: unknown) => {
+        console.error(`${target.owner}/${target.repository}#${target.number} のラベルを外せなかった`, error)
+    })
+    await deleteRefusals(request, target).catch((error: unknown) => {
+        console.error(`${target.owner}/${target.repository}#${target.number} の断ったコメントを消せなかった`, error)
+    })
+    if (isConventionsSource(target.owner, target.repository)) {
+        await syncSkill(request)
+    }
+}
 
 const handleLabeled = async (request: GitHubRequest, event: WebhookEvent): Promise<void> => {
     const target: MergeRequest = {
@@ -53,39 +67,24 @@ const handleLabeled = async (request: GitHubRequest, event: WebhookEvent): Promi
     }
     try {
         const result = await mergePullRequest(request, target)
-        if (result.pushed) {
-            console.log(`${target.owner}/${target.repository}#${target.number} のブランチを ${result.sha} まで進めた。synchronize を待つ`)
-        } else {
+        if (result.status === "refused") {
             await reportRefusal(request, target, result.reasons)
+            return
         }
-    } catch (error) {
-        console.error(`${target.owner}/${target.repository}#${target.number} のマージに失敗した`, error)
-        await reportRefusal(request, target, ["bot の処理が途中で失敗した。Worker のログを確かめる"])
-    }
-}
-
-// ボットが PR のブランチを進めたことが GitHub に反映されたら、main を進める
-const handleSynchronize = async (request: GitHubRequest, event: WebhookEvent): Promise<void> => {
-    const pull_request = event.pull_request!
-    const target: PullRequestTarget = {
-        owner: event.repository.owner.login,
-        repository: event.repository.name,
-        number: pull_request.number,
-    }
-    try {
-        const result = await advanceDefaultBranch(request, target, pull_request.base.ref, pull_request.head.sha)
-        if (result.status === "advanced") {
+        if (result.status === "merged") {
             console.log(`${target.owner}/${target.repository}#${target.number} を ${result.sha} でマージした`)
-            await removeMergeLabel(request, target)
-            // 前に断ったコメントは、マージできたので消す。消せなくてもマージの処理は止めない
-            await deleteRefusals(request, target).catch((error: unknown) => {
-                console.error(`${target.owner}/${target.repository}#${target.number} の断ったコメントを消せなかった`, error)
-            })
-            if (isConventionsSource(target.owner, target.repository)) {
-                await syncSkill(request)
-            }
-        } else if (result.status === "refused") {
-            await reportRefusal(request, target, result.reasons)
+            await finishMerge(request, target)
+            return
+        }
+        // GitHub がマージを終えるのを少し待つ。待ちきれなければ、マージされたイベントで片付ける
+        const outcome = await waitForMerge(request, target, result.uuid)
+        if (outcome.status === "merged") {
+            console.log(`${target.owner}/${target.repository}#${target.number} を ${outcome.sha} でマージした`)
+            await finishMerge(request, target)
+        } else if (outcome.status === "failed") {
+            await reportRefusal(request, target, [`GitHub がマージに失敗した: ${outcome.message}`])
+        } else {
+            console.log(`${target.owner}/${target.repository}#${target.number} のマージは GitHub の中でまだ終わっていない。マージされたイベントで片付ける`)
         }
     } catch (error) {
         console.error(`${target.owner}/${target.repository}#${target.number} のマージに失敗した`, error)
@@ -93,12 +92,12 @@ const handleSynchronize = async (request: GitHubRequest, event: WebhookEvent): P
     }
 }
 
-// synchronize のうち、merge ラベルが付いた PR にボット自身が push したものだけを扱う
-export const isMergeSynchronize = (name: string, event: WebhookEvent): boolean =>
+// merge ラベルの付いた PR がマージされたイベント。待ちきれなかったマージの片付けに使う
+export const isMergedWithLabel = (name: string, event: WebhookEvent): boolean =>
     name === "pull_request"
-    && event.action === "synchronize"
-    && event.sender.login === botCommitter().name
-    && (event.pull_request?.labels ?? []).some((label) => label.name === merge_label)
+    && event.action === "closed"
+    && event.pull_request?.merged === true
+    && (event.pull_request.labels ?? []).some((label) => label.name === merge_label)
 
 // フッターを取り除く対象を、イベントから取り出す。対象がなければ undefined を返す
 export const readFooterTarget = (name: string, event: WebhookEvent): FooterTarget | undefined => {
@@ -138,8 +137,8 @@ const handle = async (env: Env, name: string, event: WebhookEvent): Promise<void
         await handleLabeled(request, event)
         return
     }
-    if (isMergeSynchronize(name, event)) {
-        await handleSynchronize(request, event)
+    if (isMergedWithLabel(name, event)) {
+        await finishMerge(request, { owner: event.repository.owner.login, repository: event.repository.name, number: event.pull_request!.number })
         return
     }
     const footer_target = readFooterTarget(name, event)
