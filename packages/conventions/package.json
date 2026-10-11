@@ -1,0 +1,20 @@
+{
+    "name": "@philtz/conventions",
+    "private": true,
+    "type": "module",
+    "exports": {
+        "./rules": "./src/rules.ts"
+    },
+    "scripts": {
+        "build": "node build.ts",
+        "typecheck": "tsc -p tsconfig.json --noEmit",
+        "test": "node --test \"src/**/*.test.ts\""
+    },
+    "dependencies": {
+        "yaml": "^2.9.1"
+    },
+    "devDependencies": {
+        "@philtz/tsconfig": "workspace:*",
+        "esbuild": "0.28.1"
+    }
+}

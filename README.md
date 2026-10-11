@@ -1,69 +1,137 @@
-# philtzjp/startingpoint
+# organizer-bot
 
-startingpoint は、Philtz の新規リポジトリを始めるための共通テンプレートです。
+GitHub の組織の運用を手伝う GitHub App の bot です。Philtz の組織では philtz-organizer-bot として動いています。Cloudflare Worker で動き、次のことを行います。
 
-> startingpoint is a shared template for starting new Philtz repositories.
+- PR に `merge` ラベルが付くと、PR を squash でマージする
+- Issue と PR のタイトルと本文を、組織の書式の規約で検査する
+- Issue、PR、コメントからツールが付けたフッターを取り除く
+- 書式の検査器と規約を、組織のスキルのリポジトリの conventions スキルに写す
+- 週に 1 回、組織のプロフィールに出す統計のグラフを作り直す
 
-テンプレートに入れるのは、リポジトリに置くしかないものだけです。手順や規約は写すと古くなるので、次の正本から読みます。
+## 中身
 
-| 内容 | 正本 |
-| --- | --- |
-| エージェントが作業前に読む手順 | このリポジトリの `START.md` |
-| Git と GitHub の規約、日本語の書き方など | [philtzjp/skills](https://github.com/philtzjp/skills) のスキル |
-| Issue と PR のテンプレート | [philtzjp/.github](https://github.com/philtzjp/.github) の org の既定 |
-| Issue、PR、コミットメッセージの書式 | [philtzjp/pulumi](https://github.com/philtzjp/pulumi) の `.github/conventions.yml` |
+| 場所 | 中身 |
+|---|---|
+| `apps/organizer-bot` | Worker |
+| `packages/conventions` | 書式の検査器。Worker、手元の commit-msg hook、Actions の検査が使う |
+| `.github/workflows/conventions.yml` | ほかのリポジトリから呼べる、書式の検査の workflow |
 
----
+書式の規約の正本は、このリポジトリではなく、組織の `.github` リポジトリの `conventions.yml` にあります。`packages/conventions/fixtures/conventions.yml` は、テストのための写しです。
 
-## Philtz のリポジトリで開発する人へ
+組織に固有の値は、コードに書かず Worker の環境変数で受け取ります。一覧は `apps/organizer-bot/src/config.ts` にあります。
 
-使っているエージェント（Claude Code、Codex、Cursor など）に、次の文章をそのまま貼り付けてください。スキルの導入や Git の注意点は、エージェントが `START.md` を読んで対応します。AGENTS.md があるリポジトリでは、貼り付けなくてもエージェントが自分で読みます。
+## マージの流れ
 
-```text
-https://raw.githubusercontent.com/philtzjp/startingpoint/main/START.md を curl で取得して全文を読み、書かれている手順に従ってください。
+1. webhook の署名を確かめ、PR に `merge` ラベルが付いたイベントだけを受ける
+2. PR が開いていて Draft でないこと、タイトルと本文が規約に合っていること、同じリポジトリのブランチであること、デフォルトブランチに追いついていること、必須の検査が通っていること、ruleset が求める数の承認があることを確かめる。bot は ruleset を bypass してブランチを進めるので、承認の条件も bot が確かめる。ラベルを付けた人が org の owner なら、承認の条件は確かめない
+3. 変更したファイルと、そのリポジトリの `.github/conventions.yml` から scope を決める。ファイルがなければ組織の `.github` の `conventions.yml` を使う
+4. PR の先頭のツリーを使い、親をデフォルトブランチの先頭にしたコミットを作る。件名は `merge(scope): 説明`、author は PR を出した人の noreply アドレス、committer は bot にする
+5. PR のブランチをそのコミットまで進める
+6. GitHub が PR の head の更新を反映すると、`pull_request` の `synchronize` のイベントが届く。ボット自身の push で、PR に `merge` ラベルが付いていて、head のコミットの親がデフォルトブランチの先頭なら、デフォルトブランチをそのコミットまで進める。反映される前に進めると、PR はマージ済みではなくクローズと表示される
+7. `merge` ラベルを外す
+
+2 で条件を満たさないときや、途中で失敗したときは、理由を PR にコメントしてラベルを外します。
+
+### ラベルを付けても何も起きないとき
+
+ラベルが付いたまま、1 分たってもマージもコメントもされないときは、GitHub から Worker への配信が失敗しています。GitHub は失敗した配信を自動では再送しません。ラベルを外して付け直すと、もう一度配信されます。
+
+配信の結果は、GitHub App の設定の画面の Advanced で見られます。そこから同じ配信を再送することもできます。
+
+6 の `synchronize` の配信が失敗したときは、PR のブランチが squash のコミットに置き換わったまま止まります。中身は同じなので、ラベルを付け直せば、もう一度 squash のコミットを作ってマージします。
+
+## 書式を検査する流れ
+
+1. PR が開かれたか、編集されたか、push されたイベントと、Issue が開かれたか編集されたイベントを受ける。閉じたものは検査しない
+2. そのリポジトリの `.github/conventions.yml` で、タイトルと本文を検査する。ファイルがなければ組織の `.github` の `conventions.yml` を使う。フッターはボットが取り除くので、取り除いたあとの本文で検査する
+3. PR なら、先頭のコミットに `organizer-bot/conventions` のステータスを付ける
+4. 違反があれば、内容を 1 つのコメントにまとめる。すでにあれば書き直し、直ったら消す
+
+違反のある PR は、`merge` ラベルを付けてもマージしません。Issue の作成は止められないので、コメントで知らせるだけです。
+
+## フッターを取り除く流れ
+
+1. Issue、PR、コメントが作られたか編集されたイベントを受ける
+2. そのリポジトリの `.github/conventions.yml` の `footers` の形に当たる部分を本文から取り除き、本文を書き直す。ファイルがなければ組織の `.github` の `conventions.yml` を使う
+3. `deleted_bot_comments` に挙げた bot のコメントは、丸ごと消す
+
+書き直すと編集のイベントがもう一度届きますが、そのときはフッターがないので何もしません。コメントの名前の横に出る「with Claude」は、どの App を通して投稿したかの記録で、本文ではないので消せません。
+
+## 準備
+
+GitHub App を作り、組織に入れたうえで、次を用意します。Philtz の組織では、App と鍵と環境変数は philtzjp/pulumi が用意して届けます。
+
+### 1. App の権限と webhook
+
+App の設定の画面で、次のように変えます。
+
+| 項目 | 値 |
+|---|---|
+| Webhook の Active | 入れる |
+| Webhook URL | `https://<WORKER_DOMAIN>/webhook` |
+| Webhook secret | `openssl rand -hex 32` で作った値 |
+| Repository の Contents | Read and write |
+| Repository の Pull requests | Read and write |
+| Repository の Checks | Read-only |
+| Repository の Commit statuses | Read and write |
+| Repository の Issues | Read and write |
+| Subscribe to events | Pull request、Issues、Issue comment |
+
+### 2. 秘密鍵を PKCS#8 に変える
+
+Worker の Web Crypto は PKCS#8 の鍵しか読めません。GitHub が発行する鍵は PKCS#1 なので、変換してから secret に入れます。
+
+```sh
+openssl pkcs8 -topk8 -nocrypt -in app.private-key.pem -out app.pkcs8.pem
 ```
 
-## Features
+### 3. Worker の secret
 
-- `AGENTS.md`: `START.md` の正本を読む案内と、スキルを入れるコマンド。Claude Code は CLAUDE.md がなければ AGENTS.md を読むので、CLAUDE.md は置きません
-- `.gitignore`: リポジトリごとに入れたスキルをコミットしない設定
-- `.vite-hooks/`: pre-commit、pre-push、commit-msg の git hook。`git config core.hooksPath .vite-hooks` で有効になります。commit-msg は、conventions スキルの検査器を呼んで正本の規約で検査します
+Worker のアカウントにログインした状態で、次を実行して値を入れます。値はコマンドの引数に書かず、聞かれたときに入れます。
 
-## Usage
-
-新しいリポジトリは philtzjp/pulumi の宣言から作ります。このテンプレートから作ったリポジトリでは、次を確認してください。
-
-- 入れるスキルを足すときは、`AGENTS.md` のコマンドに `-s <スキル名>` を足すこと
-- リポジトリ固有の規約があれば、`AGENTS.md` の案内の下に書くこと
-- リポジトリ固有のスキルをコミットするときは、`.gitignore` を次のように書き換え、固有のスキルだけを戻すこと
-
-  ```gitignore
-  .agents/skills/*
-  !.agents/skills/<固有のスキル名>/
-  .claude/skills/*
-  !.claude/skills/<固有のスキル名>
-  skills-lock.json
-  ```
-
-- 適用するライセンスや権利表示を決め、必要なら `LICENSE` を足すこと。このテンプレートは `LICENSE` を含みません
-- `git config core.hooksPath .vite-hooks` を実行して git hook を有効にすること。clone ごとの設定なので、作業環境を作るたびに実行します
-
-## Repository Structure
-
-```text
-.
-├── .vite-hooks/
-│   ├── commit-msg   # conventions スキルの検査器で、コミットメッセージを正本の規約で検査
-│   ├── pre-commit   # 暗号化されていない .env* の混入を検査
-│   └── pre-push     # リモートの状態が古いまま push するのを防ぐ
-├── .gitignore       # リポジトリごとに入れたスキルを無視する
-├── AGENTS.md        # START.md を読む案内と、スキルを入れるコマンド
-├── README.md
-└── START.md         # エージェントが作業前に読む手順の正本。テンプレートから作るときには写さない
+```sh
+pnpm --filter @philtz/organizer-bot exec wrangler secret put GH_APP_ID
+pnpm --filter @philtz/organizer-bot exec wrangler secret put GH_APP_PRIVATE_KEY
+pnpm --filter @philtz/organizer-bot exec wrangler secret put GH_WEBHOOK_SECRET
 ```
 
-## Rights
+### 4. デプロイの値
 
-このテンプレートにはライセンスファイルを含めていません。テンプレートから作成したリポジトリに、意図しないライセンスがそのまま付くのを防ぐためです。
+このリポジトリの Environment `cloudflare` に、次を入れます。main に Worker か検査器の変更が入ると、`deploy` の workflow がデプロイします。
 
-作成先リポジトリに適用するライセンスや権利表示は、そのリポジトリ側で決めて明示してください。
+| 種類 | 名前 | 値 |
+|---|---|---|
+| secret | `CLOUDFLARE_API_TOKEN` | Workers の Editor の権限を持つ Cloudflare の token |
+| variable | `CLOUDFLARE_ACCOUNT_ID` | Worker を置く Cloudflare のアカウントの ID |
+| variable | `WORKER_DOMAIN` | webhook を受けるドメイン |
+| variable | `ORGANIZATION` | 組織の login |
+| variable | `BOT_LOGIN` | App の slug |
+| variable | `BOT_USER_ID` | bot のユーザーの ID |
+| variable | `CONVENTIONS_REPOSITORY` | 規約の正本のリポジトリ。`<owner>/.github` |
+| variable | `CHECKER_REPOSITORY` | このリポジトリ。`<owner>/organizer-bot` |
+| variable | `SKILLS_REPOSITORY` | conventions スキルを置くリポジトリ |
+| variable | `PROFILE_REPOSITORY` | 統計の画像を置くリポジトリ |
+| variable | `STATS_EXCLUDED_REPOSITORIES` | 統計から外すリポジトリの名前。カンマで区切る |
+
+## webhook の secret を入れ替える
+
+secret が漏れたおそれがあるときや、Worker と App の secret が食い違ったときに入れ替えます。新しい値を作り、Worker と App の両方に入れます。値は画面にも入力欄にも出さず、一時的なファイルを通して渡します。
+
+App の設定を API で変えるには、App の秘密鍵で作った JWT が要ります。準備の 2 で作った PKCS#8 の鍵を `app.pkcs8.pem` として手元に置き、`apps/organizer-bot` で次を実行します。
+
+```sh
+umask 077
+d=$(mktemp -d)
+trap 'rm -rf "$d"' EXIT
+openssl rand -hex 32 | tr -d '\n' > "$d/secret"
+pnpm exec wrangler secret put GH_WEBHOOK_SECRET < "$d/secret"
+jwt=$(node --input-type=module -e 'import { readFileSync } from "node:fs"; import { createAppJwt } from "./src/github.ts"; console.log(await createAppJwt(process.argv[2], readFileSync(process.argv[1], "utf8")))' app.pkcs8.pem "$APP_ID")
+jq -n --rawfile secret "$d/secret" '{secret: $secret}' \
+  | curl -sS -X PATCH https://api.github.com/app/hook/config \
+    -H "Authorization: Bearer $jwt" -H "Accept: application/vnd.github+json" --data @- \
+  | jq '{url, secret_set: (.secret != null)}'
+```
+
+`APP_ID` には GitHub App の App ID を入れておきます。最後に `secret_set` が `true` と出れば、App 側にも入っています。
+
+入れ替えたあとは、App の設定の画面の Advanced で、新しい配信の応答が 202 になっていることを確かめます。401 になっていれば、Worker と App の secret が食い違っています。

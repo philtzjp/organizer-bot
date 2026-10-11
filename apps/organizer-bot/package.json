@@ -1,0 +1,21 @@
+{
+    "name": "@philtz/organizer-bot",
+    "private": true,
+    "type": "module",
+    "exports": "./src/index.ts",
+    "scripts": {
+        "typecheck": "tsc -p tsconfig.json --noEmit",
+        "test": "node --test \"src/**/*.test.ts\"",
+        "deploy": "wrangler deploy"
+    },
+    "dependencies": {
+        "@philtz/conventions": "workspace:*",
+        "yaml": "^2.9.1"
+    },
+    "devDependencies": {
+        "@philtz/tsconfig": "workspace:*",
+        "@types/node": "^26.6.3",
+        "typescript": "^6.0.3",
+        "wrangler": "^4.143.0"
+    }
+}

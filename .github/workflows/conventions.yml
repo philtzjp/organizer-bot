@@ -1,0 +1,52 @@
+name: conventions
+
+# Issue、PR、コミット、tag を組織の規約で検査する。ほかのリポジトリから呼ぶ。
+#   jobs:
+#       conventions:
+#           uses: <組織>/organizer-bot/.github/workflows/conventions.yml@main
+# 規約は、呼んだリポジトリの .github/conventions.yml があればそれを、なければ組織の .github の conventions.yml を使う
+on:
+    workflow_call:
+
+permissions:
+    contents: read
+    issues: read
+    pull-requests: read
+
+jobs:
+    conventions:
+        runs-on: ubuntu-latest
+        timeout-minutes: 10
+        steps:
+            - name: 呼んだリポジトリの規約のファイルを取り出す
+              uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  path: caller
+                  sparse-checkout: .github/conventions.yml
+                  sparse-checkout-cone-mode: false
+            - name: 検査器を取り出す
+              uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  repository: ${{ github.repository_owner }}/organizer-bot
+                  path: checker
+            - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+              with:
+                  package_json_file: checker/package.json
+            - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+              with:
+                  node-version-file: checker/.node-version
+            - run: pnpm install --frozen-lockfile --filter @philtz/conventions
+              working-directory: checker
+            - name: 規約のファイルを決める
+              env:
+                  OWNER: ${{ github.repository_owner }}
+              run: |
+                  if [ -f caller/.github/conventions.yml ]; then
+                      echo "CONVENTIONS_PATH=$GITHUB_WORKSPACE/caller/.github/conventions.yml" >> "$GITHUB_ENV"
+                  else
+                      curl -fsSL "https://raw.githubusercontent.com/$OWNER/.github/main/conventions.yml" -o "$RUNNER_TEMP/conventions.yml"
+                      echo "CONVENTIONS_PATH=$RUNNER_TEMP/conventions.yml" >> "$GITHUB_ENV"
+                  fi
+            - run: node checker/packages/conventions/src/cli.ts github
+              env:
+                  GITHUB_TOKEN: ${{ github.token }}

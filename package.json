@@ -1,0 +1,22 @@
+{
+    "name": "@philtz/organizer-bot-workspace",
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "build": "turbo run build",
+        "typecheck": "turbo run typecheck",
+        "test": "turbo run test"
+    },
+    "devEngines": {
+        "packageManager": {
+            "name": "pnpm",
+            "version": "^11.0.9",
+            "onFail": "download"
+        }
+    },
+    "devDependencies": {
+        "@types/node": "^26.6.3",
+        "turbo": "^2.11.4",
+        "typescript": "^6.0.3"
+    }
+}

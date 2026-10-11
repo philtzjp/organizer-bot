@@ -1,0 +1,26 @@
+{
+    "$schema": "./node_modules/wrangler/config-schema.json",
+    // GitHub App の webhook を受け、PR を squash でマージする。週に 1 回、org のプロフィールの統計を作り直す。毎日、conventions スキルを組織の規約と検査器に合わせる
+    "name": "organizer-bot",
+    "main": "src/index.ts",
+    "compatibility_date": "2026-09-30",
+    "compatibility_flags": ["nodejs_compat"],
+    // アカウントは環境変数 CLOUDFLARE_ACCOUNT_ID で、受け口のドメインは wrangler deploy の --domain で渡す。
+    // 組織に固有の値はコードに書かず、デプロイの workflow が Actions の variable から渡す
+    "workers_dev": true,
+    // 日本時間の 0 時に動く。毎週月曜は org のプロフィールの統計のグラフを作り直し、毎日 conventions スキルを写し直す。
+    // 式は src/index.ts の stats_cron と skill_cron と同じにする
+    "triggers": {
+        "crons": ["0 15 * * SUN", "0 15 * * *"]
+    },
+    "observability": {
+        "enabled": true
+    },
+    "secrets": {
+        "required": [
+            "GH_APP_ID",
+            "GH_APP_PRIVATE_KEY",
+            "GH_WEBHOOK_SECRET"
+        ]
+    }
+}

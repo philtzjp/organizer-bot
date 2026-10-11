@@ -1,0 +1,8 @@
+packages:
+    - "apps/*"
+    - "packages/*"
+
+allowBuilds:
+    # wrangler が使う。インストール時に自分の環境向けのバイナリを用意する
+    esbuild: true
+    workerd: true

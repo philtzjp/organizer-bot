@@ -1,0 +1,11 @@
+{
+    "extends": "@philtz/tsconfig/base.json",
+    "compilerOptions": {
+        "rootDir": "src",
+        "noEmit": true,
+        "allowImportingTsExtensions": true,
+        "erasableSyntaxOnly": true,
+        "lib": ["es2024", "dom"]
+    },
+    "include": ["src"]
+}

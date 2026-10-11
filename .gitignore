@@ -2,3 +2,10 @@
 .agents/skills/
 .claude/skills/
 skills-lock.json
+
+# 依存とビルドの出力
+node_modules/
+.turbo/
+*.log
+.wrangler/
+.dev.vars*
