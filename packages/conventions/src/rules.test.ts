@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
-import { allowedScope, checkCommitMessage, isGitGeneratedSubject, checkIssue, checkPullRequest, checkTag, loadConventions, stripFooters } from "./rules.ts"
+import { allowedScope, checkCommitMessage, isGitGeneratedSubject, semanticLintPrompt, checkIssue, checkPullRequest, checkTag, loadConventions, stripFooters } from "./rules.ts"
 
 const conventions = loadConventions(new URL("../fixtures/conventions.yml", import.meta.url).pathname)
 
@@ -265,5 +265,21 @@ describe("フッター", () => {
 
     it("コミットメッセージのセッションの URL は止める", () => {
         assert.ok(commit("docs(docs): 命名規則を追加する\n\nClaude-Session: https://claude.ai/code/session_1").length > 0)
+    })
+})
+
+describe("説明の判定の指示", () => {
+    it("件名の説明の部分だけを渡し、type と scope を渡さない", () => {
+        const prompt = semanticLintPrompt("feat(github): Environment を消す準備として protect を外せるようにする")
+        assert.ok(prompt.includes("Description: Environment を消す準備として protect を外せるようにする"))
+        assert.ok(!prompt.includes("feat(github)"))
+    })
+
+    it("type と scope を判定しないよう指示する", () => {
+        assert.ok(semanticLintPrompt("docs(docs): 命名規則を追加する").includes("do not judge them"))
+    })
+
+    it("形の合わない件名は、そのまま渡す", () => {
+        assert.ok(semanticLintPrompt("update").includes("Description: update"))
     })
 })

@@ -8,7 +8,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { checkCommitMessage, checkIssue, isGitGeneratedSubject, checkPullRequest, checkTag, loadConventions } from "./rules.ts"
+import { checkCommitMessage, checkIssue, isGitGeneratedSubject, checkPullRequest, checkTag, loadConventions, semanticLintPrompt } from "./rules.ts"
 
 // 規約のファイルは、CONVENTIONS_PATH、作業中のリポジトリの .github/conventions.yml、この CLI の隣の conventions.yml の順に探す。
 // 隣のものは、philtzjp/skills の conventions スキルとして配った CLI が使う
@@ -29,25 +29,14 @@ const report = (errors: string[], context: string): boolean => {
 
 const git = (...args: string[]): string => execFileSync("git", args, { encoding: "utf8" }).trim()
 
-// 説明に中身があるかを claude -p で判定する。claude がなければ codex exec で判定し、
+// 説明に中身があるかを claude -p で判定する。指示は rules.ts の semanticLintPrompt で作る。claude がなければ codex exec で判定し、
 // どちらもないときや判定に失敗したときは通す
 const lintSemantically = (message: string): string[] => {
     const rules = conventions.commit.semantic_lint
     if (!rules.enabled) {
         return []
     }
-    const prompt = [
-        "You are a strict commit message linter. Respond with ONLY 'PASS' or 'FAIL: reason in Japanese'.",
-        "",
-        "Rules:",
-        "- Format: type(scope): description",
-        "- Description MUST clearly describe a specific change (what was changed and/or why)",
-        "- FAIL if the description is meaningless, nonsensical, placeholder-like, or does not describe an actual change",
-        "- FAIL examples: 'fix(repo): a', 'feat(repo): test', 'fix(repo): update', 'chore(repo): changes'",
-        "- PASS examples: 'fix(github): チームの親を宣言の順に作る', 'docs(docs): 命名規則を追加する'",
-        "",
-        `Message: ${message}`,
-    ].join("\n")
+    const prompt = semanticLintPrompt(message)
     const runClaude = (): string =>
         execFileSync("claude", ["-p", "--model", rules.model, prompt], {
             encoding: "utf8",
