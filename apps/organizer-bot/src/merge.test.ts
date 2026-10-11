@@ -221,7 +221,7 @@ describe("mergePullRequest", () => {
 })
 
 describe("必須の検査が決まっていないリポジトリ", () => {
-    const without_required = (runs: { name: string, status: string, conclusion: string | null }[], workflows: { name: string, status: string, conclusion: string | null }[], statuses: { context: string, state: string }[] = []): Record<string, GitHubResponse> => ({
+    const without_required = (runs: { id?: number, name: string, status: string, conclusion: string | null }[], workflows: { id?: number, name: string, status: string, conclusion: string | null }[], statuses: { context: string, state: string }[] = []): Record<string, GitHubResponse> => ({
         [`GET ${repo}/rules/branches/main`]: { status: 200, body: [] },
         [`GET ${repo}/commits/head-sha/check-runs?per_page=100&page=1`]: { status: 200, body: { check_runs: runs.map((run) => ({ ...run, app: { id: 15368 } })) } },
         [`GET ${repo}/commits/head-sha/status`]: { status: 200, body: { statuses } },
@@ -238,6 +238,14 @@ describe("必須の検査が決まっていないリポジトリ", () => {
     it("CI が失敗していればマージしない", async () => {
         const fake = createFakeGitHub(without_required([{ name: "verify", status: "completed", conclusion: "failure" }], [], [{ context: "example-bot/conventions", state: "success" }]))
         assert.deepEqual(await mergePullRequest(fake.request, target), { status: "refused", reasons: ["検査 verify が失敗している"] })
+    })
+
+    it("取り消された前の実行は数えず、いちばん新しいものだけを見る", async () => {
+        const fake = createFakeGitHub(without_required(
+            [{ id: 1, name: "conventions", status: "completed", conclusion: "cancelled" }, { id: 2, name: "conventions", status: "completed", conclusion: "success" }],
+            [{ id: 10, name: "conventions", status: "completed", conclusion: "cancelled" }, { id: 11, name: "conventions", status: "completed", conclusion: "success" }],
+        ))
+        assert.deepEqual(await mergePullRequest(fake.request, target), { status: "pending", uuid: "merge-uuid" })
     })
 
     it("全部が通っていればマージを頼む", async () => {

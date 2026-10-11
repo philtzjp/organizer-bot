@@ -40,7 +40,7 @@ type PullRequest = {
     base: { ref: string, repo: { full_name: string, default_branch: string } }
 }
 
-type CheckRun = { name: string, status: string, conclusion: string | null, app: { id: number } | null }
+type CheckRun = { id?: number, name: string, status: string, conclusion: string | null, app: { id: number } | null }
 type CommitStatus = { context: string, state: string }
 type BranchRule = {
     type: string
@@ -70,7 +70,19 @@ const readRequiredChecks = async (request: GitHubRequest, full_name: string, bra
     return [...from_rulesets, ...from_protection]
 }
 
-type WorkflowRun = { name: string, status: string, conclusion: string | null }
+type WorkflowRun = { id: number, name: string, status: string, conclusion: string | null }
+
+// 名前ごとに、id のいちばん大きいもの、つまりいちばん新しいものを残す
+export const latestByName = <T extends { id?: number, name: string }>(items: T[]): T[] => {
+    const latest = new Map<string, T>()
+    for (const item of items) {
+        const current = latest.get(item.name)
+        if (current === undefined || (item.id ?? 0) > (current.id ?? 0)) {
+            latest.set(item.name, item)
+        }
+    }
+    return [...latest.values()]
+}
 
 // 必須の検査が決まっていないリポジトリでは、PR の head に付いたものを全部待つ。
 // 検査、GitHub Actions の workflow の実行、commit status のどれかが終わっていないか失敗していれば、マージしない。
@@ -78,14 +90,15 @@ type WorkflowRun = { name: string, status: string, conclusion: string | null }
 const checkAllChecks = async (request: GitHubRequest, full_name: string, sha: string, check_runs: CheckRun[], statuses: CommitStatus[]): Promise<string[]> => {
     const workflow_runs = (expectOk(await request("GET", `/repos/${full_name}/actions/runs?head_sha=${sha}&per_page=100`), "workflow の実行を読む") as { workflow_runs: WorkflowRun[] }).workflow_runs
     const reasons: string[] = []
-    for (const run of check_runs) {
+    // 同じ名前のものは、いちばん新しいものだけを見る。workflow の concurrency で取り消された前の実行を、失敗に数えない
+    for (const run of latestByName(check_runs)) {
         if (run.status !== "completed") {
             reasons.push(`検査 ${run.name} がまだ終わっていない`)
         } else if (!passing_conclusions.has(run.conclusion ?? "")) {
             reasons.push(`検査 ${run.name} が失敗している`)
         }
     }
-    for (const run of workflow_runs) {
+    for (const run of latestByName(workflow_runs)) {
         if (run.status !== "completed") {
             reasons.push(`workflow ${run.name} がまだ終わっていない`)
         } else if (!passing_conclusions.has(run.conclusion ?? "")) {
