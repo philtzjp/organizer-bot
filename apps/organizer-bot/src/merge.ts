@@ -70,13 +70,46 @@ const readRequiredChecks = async (request: GitHubRequest, full_name: string, bra
     return [...from_rulesets, ...from_protection]
 }
 
+type WorkflowRun = { name: string, status: string, conclusion: string | null }
+
+// 必須の検査が決まっていないリポジトリでは、PR の head に付いたものを全部待つ。
+// 検査、GitHub Actions の workflow の実行、commit status のどれかが終わっていないか失敗していれば、マージしない。
+// push の直後で workflow の実行がまだ作られていないときは見逃すが、作られたものは必ず待つ
+const checkAllChecks = async (request: GitHubRequest, full_name: string, sha: string, check_runs: CheckRun[], statuses: CommitStatus[]): Promise<string[]> => {
+    const workflow_runs = (expectOk(await request("GET", `/repos/${full_name}/actions/runs?head_sha=${sha}&per_page=100`), "workflow の実行を読む") as { workflow_runs: WorkflowRun[] }).workflow_runs
+    const reasons: string[] = []
+    for (const run of check_runs) {
+        if (run.status !== "completed") {
+            reasons.push(`検査 ${run.name} がまだ終わっていない`)
+        } else if (!passing_conclusions.has(run.conclusion ?? "")) {
+            reasons.push(`検査 ${run.name} が失敗している`)
+        }
+    }
+    for (const run of workflow_runs) {
+        if (run.status !== "completed") {
+            reasons.push(`workflow ${run.name} がまだ終わっていない`)
+        } else if (!passing_conclusions.has(run.conclusion ?? "")) {
+            reasons.push(`workflow ${run.name} が失敗している`)
+        }
+    }
+    for (const status of statuses) {
+        if (status.state === "pending") {
+            reasons.push(`検査 ${status.context} がまだ終わっていない`)
+        } else if (status.state !== "success") {
+            reasons.push(`検査 ${status.context} が失敗している`)
+        }
+    }
+    // 同じ名前の検査と workflow は、理由を 1 つにまとめる
+    return [...new Set(reasons)]
+}
+
 const checkRequiredChecks = async (request: GitHubRequest, full_name: string, branch: string, sha: string, rules: BranchRule[]): Promise<string[]> => {
     const required = await readRequiredChecks(request, full_name, branch, rules)
-    if (required.length === 0) {
-        return []
-    }
     const check_runs = await readAll<CheckRun>(request, `/repos/${full_name}/commits/${sha}/check-runs`, (body) => (body as { check_runs: CheckRun[] }).check_runs)
     const statuses = (expectOk(await request("GET", `/repos/${full_name}/commits/${sha}/status`), "commit status を読む") as { statuses: CommitStatus[] }).statuses
+    if (required.length === 0) {
+        return checkAllChecks(request, full_name, sha, check_runs, statuses)
+    }
     const reasons: string[] = []
     for (const check of required) {
         const runs = check_runs.filter((run) => run.name === check.context && (check.integration_id === undefined || run.app?.id === check.integration_id))
