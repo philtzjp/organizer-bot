@@ -12,10 +12,10 @@ export type ConfigEnv = {
     CONVENTIONS_REPOSITORY: string
     // 書式の検査器のコードがあるリポジトリ。<owner>/<repo> の形
     CHECKER_REPOSITORY: string
-    // 検査器を conventions スキルとして配るリポジトリ。<owner>/<repo> の形
-    SKILLS_REPOSITORY: string
-    // 組織のプロフィールの統計の画像を置くリポジトリ。<owner>/<repo> の形
-    PROFILE_REPOSITORY: string
+    // 検査器を conventions スキルとして配るリポジトリ。<owner>/<repo> の形。空なら写さない
+    SKILLS_REPOSITORY?: string
+    // 組織のプロフィールの統計の画像を置くリポジトリ。<owner>/<repo> の形。空なら作らない
+    PROFILE_REPOSITORY?: string
     // 統計から外すリポジトリの名前。カンマで区切る
     STATS_EXCLUDED_REPOSITORIES?: string
 }
@@ -26,8 +26,8 @@ export type Config = {
     bot_user_id: string
     conventions_repository: string
     checker_repository: string
-    skills_repository: string
-    profile_repository: string
+    skills_repository: string | undefined
+    profile_repository: string | undefined
     stats_excluded_repositories: Set<string>
 }
 
@@ -42,9 +42,12 @@ export const config: Config = {
     stats_excluded_repositories: new Set(["excluded-repository"]),
 }
 
+// 任意の値。wrangler deploy の --var は空の値も渡すので、空は値がないものとして扱う
+const optionalValue = (value: string | undefined): string | undefined => (value ?? "") === "" ? undefined : value
+
 // 必要な値がなければ、間違った組織を書き換えないよう止める
 export const configure = (env: ConfigEnv): void => {
-    const required = ["ORGANIZATION", "BOT_LOGIN", "BOT_USER_ID", "CONVENTIONS_REPOSITORY", "CHECKER_REPOSITORY", "SKILLS_REPOSITORY", "PROFILE_REPOSITORY"] as const
+    const required = ["ORGANIZATION", "BOT_LOGIN", "BOT_USER_ID", "CONVENTIONS_REPOSITORY", "CHECKER_REPOSITORY"] as const
     const missing = required.filter((name) => (env[name] ?? "") === "")
     if (missing.length > 0) {
         throw new Error(`Worker の環境変数がない: ${missing.join(", ")}`)
@@ -55,8 +58,8 @@ export const configure = (env: ConfigEnv): void => {
         bot_user_id: env.BOT_USER_ID,
         conventions_repository: env.CONVENTIONS_REPOSITORY,
         checker_repository: env.CHECKER_REPOSITORY,
-        skills_repository: env.SKILLS_REPOSITORY,
-        profile_repository: env.PROFILE_REPOSITORY,
+        skills_repository: optionalValue(env.SKILLS_REPOSITORY),
+        profile_repository: optionalValue(env.PROFILE_REPOSITORY),
         stats_excluded_repositories: new Set((env.STATS_EXCLUDED_REPOSITORIES ?? "").split(",").map((name) => name.trim()).filter((name) => name !== "")),
     })
 }

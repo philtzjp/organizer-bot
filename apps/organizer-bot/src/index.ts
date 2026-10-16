@@ -159,6 +159,9 @@ const handle = async (env: Env, name: string, event: WebhookEvent): Promise<void
 
 // 書式の検査器と規約を conventions スキルに写す。失敗してもマージの処理は止めず、毎日の cron でもう一度写す
 const syncSkill = async (request: GitHubRequest): Promise<void> => {
+    if (config.skills_repository === undefined) {
+        return
+    }
     try {
         const result = await syncConventionsSkill(request)
         console.log(result.status === "committed" ? `conventions スキルを ${result.sha} で更新した: ${result.changed.join(", ")}` : "conventions スキルは変わっていない")
@@ -169,9 +172,13 @@ const syncSkill = async (request: GitHubRequest): Promise<void> => {
 
 // 週に 1 回、組織のプロフィールの統計のグラフを作り直し、config.profile_repository の images にコミットする
 const updateProfileStats = async (env: Env): Promise<void> => {
+    if (config.profile_repository === undefined) {
+        return
+    }
+    const profile_repository = config.profile_repository
     const request = await createOrganizationRequest(env.GH_APP_ID, env.GH_APP_PRIVATE_KEY, config.organization)
     const files = renderStats(await collectStats(request, config.organization))
-    const result = await publishFiles(request, { ...splitRepository(config.profile_repository), branch: "main", directory: "images", message: stats_message }, files)
+    const result = await publishFiles(request, { ...splitRepository(profile_repository), branch: "main", directory: "images", message: stats_message }, files)
     console.log(result.status === "committed" ? `統計のグラフを ${result.sha} で更新した: ${result.changed.join(", ")}` : "統計のグラフは変わっていない")
 }
 
@@ -181,8 +188,11 @@ export const stats_cron = "0 15 * * SUN"
 // conventions スキルの写しはマージのときにも動くので、cron は取りこぼしの保険。軽いので毎日にする
 export const skill_cron = "0 15 * * *"
 
-export const scheduledTasks = (cron: string): ("stats" | "skill")[] =>
-    cron === stats_cron ? ["stats"] : cron === skill_cron ? ["skill"] : []
+// 置き場所のリポジトリを渡されていない処理は動かさない。スキルのリポジトリやプロフィールのリポジトリを持たない組織があるため
+export const scheduledTasks = (cron: string, settings: Pick<typeof config, "skills_repository" | "profile_repository"> = config): ("stats" | "skill")[] => {
+    const tasks: ("stats" | "skill")[] = cron === stats_cron ? ["stats"] : cron === skill_cron ? ["skill"] : []
+    return tasks.filter((task) => (task === "stats" ? settings.profile_repository : settings.skills_repository) !== undefined)
+}
 
 export default {
     async scheduled(controller: { cron: string }, env: Env, context: ExecutionContext): Promise<void> {
