@@ -5,7 +5,7 @@
     "main": "src/index.ts",
     "compatibility_date": "2026-09-30",
     "compatibility_flags": ["nodejs_compat"],
-    // アカウントは環境変数 CLOUDFLARE_ACCOUNT_ID で、受け口のドメインは wrangler deploy の --domain で渡す。
+    // アカウントは環境変数 CLOUDFLARE_ACCOUNT_ID で、受け口のドメインは wrangler deploy の --domain で渡す。ドメインを渡さなければ workers.dev で受ける。
     // 組織に固有の値はコードに書かず、デプロイの workflow が Actions の variable から渡す
     "workers_dev": true,
     // 日本時間の 0 時に動く。毎週月曜は org のプロフィールの統計のグラフを作り直し、毎日 conventions スキルを写し直す。

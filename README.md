@@ -93,20 +93,27 @@ pnpm --filter @philtz/organizer-bot exec wrangler secret put GH_WEBHOOK_SECRET
 
 ### 4. デプロイの値
 
-このリポジトリの Environment `cloudflare` に、次を入れます。main に Worker か検査器の変更が入ると、`deploy` の workflow がデプロイします。
+このリポジトリの組織ごとの Environment に、次を入れます。main に Worker か検査器の変更が入ると、`deploy` の workflow が Environment ごとにデプロイします。
+
+| Environment | 組織 | App |
+|---|---|---|
+| `cloudflare` | philtzjp | philtz-organizer-bot |
+| `cloudflare-osaxyz` | osaxyz | osaxyz-organizer-bot |
+
+組織を足すときは、Environment を足し、`deploy` の workflow の `matrix.environment` に名前を足します。
 
 | 種類 | 名前 | 値 |
 |---|---|---|
 | secret | `CLOUDFLARE_API_TOKEN` | Workers の Editor の権限を持つ Cloudflare の token |
 | variable | `CLOUDFLARE_ACCOUNT_ID` | Worker を置く Cloudflare のアカウントの ID |
-| variable | `WORKER_DOMAIN` | webhook を受けるドメイン |
+| variable | `WORKER_DOMAIN` | webhook を受けるドメイン。任意で、なければ `organizer-bot.<アカウントのサブドメイン>.workers.dev` で受ける |
 | variable | `ORGANIZATION` | 組織の login |
 | variable | `BOT_LOGIN` | App の slug |
 | variable | `BOT_USER_ID` | bot のユーザーの ID |
 | variable | `CONVENTIONS_REPOSITORY` | 規約の正本のリポジトリ。`<owner>/.github` |
 | variable | `CHECKER_REPOSITORY` | このリポジトリ。`<owner>/organizer-bot` |
-| variable | `SKILLS_REPOSITORY` | conventions スキルを置くリポジトリ |
-| variable | `PROFILE_REPOSITORY` | 統計の画像を置くリポジトリ |
+| variable | `SKILLS_REPOSITORY` | conventions スキルを置くリポジトリ。任意で、なければ conventions スキルを写さない |
+| variable | `PROFILE_REPOSITORY` | 統計の画像を置くリポジトリ。任意で、なければ統計のグラフを作らない |
 | variable | `STATS_EXCLUDED_REPOSITORIES` | 統計から外すリポジトリの名前。カンマで区切る |
 
 ## webhook の secret を入れ替える

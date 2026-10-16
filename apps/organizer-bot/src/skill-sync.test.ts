@@ -97,6 +97,14 @@ describe("scheduledTasks", () => {
         assert.deepEqual(scheduledTasks(stats_cron), ["stats"])
     })
 
+    it("スキルのリポジトリがなければ、毎日の cron で何もしない", () => {
+        assert.deepEqual(scheduledTasks(skill_cron, { skills_repository: undefined, profile_repository: "example-org/.github" }), [])
+    })
+
+    it("プロフィールのリポジトリがなければ、週に 1 回の cron で何もしない", () => {
+        assert.deepEqual(scheduledTasks(stats_cron, { skills_repository: "example-org/skills", profile_repository: undefined }), [])
+    })
+
     it("知らない cron では何もしない", () => {
         assert.deepEqual(scheduledTasks("0 0 * * *"), [])
     })

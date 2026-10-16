@@ -14,6 +14,10 @@ export const conventionsSkillFiles = (): Record<string, { repository: string, pa
 export const conventions_skill_message = "chore(.agents): conventions スキルを組織の規約と検査器に合わせる"
 
 export const syncConventionsSkill = async (request: GitHubRequest): Promise<PublishResult> => {
+    if (config.skills_repository === undefined) {
+        throw new Error("SKILLS_REPOSITORY がないので、conventions スキルを写せない")
+    }
+    const skills_repository = config.skills_repository
     const files: Record<string, string> = {}
     for (const [name, source] of Object.entries(conventionsSkillFiles())) {
         const response = await request("GET", `/repos/${source.repository}/contents/${source.path}?ref=main`, undefined, "application/vnd.github.raw+json")
@@ -24,7 +28,7 @@ export const syncConventionsSkill = async (request: GitHubRequest): Promise<Publ
         files[name] = content
     }
     return publishFiles(request, {
-        ...splitRepository(config.skills_repository),
+        ...splitRepository(skills_repository),
         branch: "main",
         directory: ".agents/skills/conventions",
         message: conventions_skill_message,
