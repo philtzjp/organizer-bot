@@ -93,7 +93,7 @@ pnpm --filter @philtz/organizer-bot exec wrangler secret put GH_WEBHOOK_SECRET
 
 ### 4. デプロイの値
 
-デプロイの手順は、`workflow_call` で呼べる `deploy-worker` の workflow にあります。呼んだ側のリポジトリの Environment から値を読むので、組織の鍵はその組織のリポジトリに置きます。ほかの組織の鍵をこのリポジトリに置かないでください。
+デプロイの手順は、composite action の `.github/actions/deploy-worker` にあります。呼んだ側の job が自分の Environment の variable と secret を入力として渡すので、組織の鍵はその組織のリポジトリに置きます。ほかの組織の鍵をこのリポジトリに置かないでください。再利用 workflow にしないのは、呼ばれた側から呼んだ側の Environment の secret を読めないためです。
 
 | 組織 | App | 呼ぶリポジトリ | Environment |
 |---|---|---|---|
@@ -107,9 +107,19 @@ philtzjp の分は、main に Worker か検査器の変更が入ると `deploy` 
 ```yaml
 jobs:
     deploy:
-        uses: philtzjp/organizer-bot/.github/workflows/deploy-worker.yml@main
-        with:
-            environment: cloudflare
+        runs-on: ubuntu-latest
+        environment: cloudflare
+        steps:
+            - uses: philtzjp/organizer-bot/.github/actions/deploy-worker@main
+              with:
+                  cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+                  cloudflare-account-id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+                  worker-domain: ${{ vars.WORKER_DOMAIN }}
+                  organization: ${{ vars.ORGANIZATION }}
+                  bot-login: ${{ vars.BOT_LOGIN }}
+                  bot-user-id: ${{ vars.BOT_USER_ID }}
+                  conventions-repository: ${{ vars.CONVENTIONS_REPOSITORY }}
+                  checker-repository: ${{ vars.CHECKER_REPOSITORY }}
 ```
 
 Environment には次を入れます。

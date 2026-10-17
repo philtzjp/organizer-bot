@@ -1,8 +1,8 @@
 name: deploy
 
 # main に入ったら、philtzjp の philtz-organizer-bot の Worker をデプロイする。
-# 手順は deploy-worker にあり、値は Environment cloudflare から読む。値は philtzjp/pulumi が届ける。
-# ほかの組織の bot は、その組織のリポジトリが deploy-worker を呼んでデプロイする。README を参照する
+# 手順は .github/actions/deploy-worker にあり、値は Environment cloudflare から渡す。値は philtzjp/pulumi が届ける。
+# ほかの組織の bot は、その組織のリポジトリが同じ action を呼んでデプロイする。README を参照する
 on:
     push:
         branches: [main]
@@ -11,7 +11,7 @@ on:
             - packages/conventions/**
             - pnpm-lock.yaml
             - .github/workflows/deploy.yml
-            - .github/workflows/deploy-worker.yml
+            - .github/actions/deploy-worker/**
     workflow_dispatch:
 
 permissions:
@@ -20,7 +20,29 @@ permissions:
 jobs:
     deploy:
         if: github.ref == 'refs/heads/main'
-        uses: ./.github/workflows/deploy-worker.yml
-        with:
-            environment: cloudflare
-            ref: ${{ github.sha }}
+        # 1 回ずつ順に動かし、途中で止めない
+        concurrency:
+            group: deploy-cloudflare
+            cancel-in-progress: false
+        runs-on: ubuntu-latest
+        timeout-minutes: 15
+        environment: cloudflare
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  sparse-checkout: .github/actions
+                  persist-credentials: false
+            - uses: ./.github/actions/deploy-worker
+              with:
+                  ref: ${{ github.sha }}
+                  cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+                  cloudflare-account-id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+                  worker-domain: ${{ vars.WORKER_DOMAIN }}
+                  organization: ${{ vars.ORGANIZATION }}
+                  bot-login: ${{ vars.BOT_LOGIN }}
+                  bot-user-id: ${{ vars.BOT_USER_ID }}
+                  conventions-repository: ${{ vars.CONVENTIONS_REPOSITORY }}
+                  checker-repository: ${{ vars.CHECKER_REPOSITORY }}
+                  skills-repository: ${{ vars.SKILLS_REPOSITORY }}
+                  profile-repository: ${{ vars.PROFILE_REPOSITORY }}
+                  stats-excluded-repositories: ${{ vars.STATS_EXCLUDED_REPOSITORIES }}
