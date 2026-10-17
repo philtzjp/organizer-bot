@@ -1,0 +1,91 @@
+name: deploy-worker
+
+# bot の Worker を 1 つの組織にデプロイする。このリポジトリの deploy と、ほかの組織のリポジトリから呼ぶ。
+# 組織に固有の値はコードに書かず、呼んだ側のリポジトリの Environment の variable と secret から読む。
+# 呼んだ側は次のように Environment の名前を渡す。secret は渡さなくてよく、Environment の secret が使われる。
+#
+#   jobs:
+#       deploy:
+#           uses: philtzjp/organizer-bot/.github/workflows/deploy-worker.yml@main
+#           with:
+#               environment: cloudflare
+on:
+    workflow_call:
+        inputs:
+            environment:
+                description: デプロイに要る値を置いた、呼んだ側のリポジトリの Environment の名前
+                type: string
+                required: true
+            ref:
+                description: デプロイする philtzjp/organizer-bot のコミット
+                type: string
+                default: main
+
+permissions:
+    contents: read
+
+jobs:
+    deploy:
+        # 同じ組織へのデプロイは 1 回ずつ順に動かし、途中で止めない
+        concurrency:
+            group: deploy-worker-${{ github.repository }}-${{ inputs.environment }}
+            cancel-in-progress: false
+        runs-on: ubuntu-latest
+        timeout-minutes: 15
+        environment: ${{ inputs.environment }}
+        env:
+            CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+            CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+            WORKER_DOMAIN: ${{ vars.WORKER_DOMAIN }}
+            ORGANIZATION: ${{ vars.ORGANIZATION }}
+            BOT_LOGIN: ${{ vars.BOT_LOGIN }}
+            BOT_USER_ID: ${{ vars.BOT_USER_ID }}
+            CONVENTIONS_REPOSITORY: ${{ vars.CONVENTIONS_REPOSITORY }}
+            CHECKER_REPOSITORY: ${{ vars.CHECKER_REPOSITORY }}
+            SKILLS_REPOSITORY: ${{ vars.SKILLS_REPOSITORY }}
+            PROFILE_REPOSITORY: ${{ vars.PROFILE_REPOSITORY }}
+            STATS_EXCLUDED_REPOSITORIES: ${{ vars.STATS_EXCLUDED_REPOSITORIES }}
+        steps:
+            - name: デプロイに要る値があることを確かめる
+              run: |
+                  missing=""
+                  # WORKER_DOMAIN、SKILLS_REPOSITORY、PROFILE_REPOSITORY、STATS_EXCLUDED_REPOSITORIES は任意
+                  for name in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID ORGANIZATION BOT_LOGIN BOT_USER_ID CONVENTIONS_REPOSITORY CHECKER_REPOSITORY; do
+                      eval "value=\${$name}"
+                      [ -z "$value" ] && missing="$missing $name"
+                  done
+                  if [ -n "$missing" ]; then
+                      echo "Environment ${{ inputs.environment }} に次の値がありません:$missing"
+                      exit 1
+                  fi
+            # 呼んだ側のリポジトリではなく、このリポジトリのコードを取り出す
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  repository: philtzjp/organizer-bot
+                  ref: ${{ inputs.ref }}
+                  persist-credentials: false
+            - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+            - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+              with:
+                  node-version-file: .node-version
+                  cache: pnpm
+            - run: pnpm install --frozen-lockfile
+            - run: pnpm exec turbo run typecheck test --filter @philtz/organizer-bot
+            - name: Worker をデプロイする
+              working-directory: apps/organizer-bot
+              # WORKER_DOMAIN がなければ、workers.dev の URL で受ける
+              run: |
+                  domain=()
+                  if [ -n "$WORKER_DOMAIN" ]; then
+                      domain=(--domain "$WORKER_DOMAIN")
+                  fi
+                  pnpm exec wrangler deploy \
+                      "${domain[@]}" \
+                      --var "ORGANIZATION:$ORGANIZATION" \
+                      --var "BOT_LOGIN:$BOT_LOGIN" \
+                      --var "BOT_USER_ID:$BOT_USER_ID" \
+                      --var "CONVENTIONS_REPOSITORY:$CONVENTIONS_REPOSITORY" \
+                      --var "CHECKER_REPOSITORY:$CHECKER_REPOSITORY" \
+                      --var "SKILLS_REPOSITORY:$SKILLS_REPOSITORY" \
+                      --var "PROFILE_REPOSITORY:$PROFILE_REPOSITORY" \
+                      --var "STATS_EXCLUDED_REPOSITORIES:$STATS_EXCLUDED_REPOSITORIES"
