@@ -19,8 +19,12 @@ type BodyRules = {
     sections: string[]
     optional_sections: string[]
     task_list_section: string
-    // 最初の行から - の箇条書きで書く欄
+    // すべての行を - の箇条書きで書く欄。字下げした行とコードブロックの中は問わない
     list_sections?: string[]
+    // 決めた欄のほかの見出しと、## のほかの深さの見出しを書かない
+    forbid_unknown_sections?: boolean
+    // 署名と最初の見出しの間に文を書かない
+    forbid_preamble?: boolean
 }
 
 export type Conventions = {
@@ -240,25 +244,68 @@ const splitSignature = (rules: Signature, body: string): { errors: string[], res
     return { errors: rules.required ? [`先頭行に署名を書く。例: ${rules.example}`] : [], rest: body }
 }
 
-// ## の見出しで本文を欄に分ける
-const splitSections = (body: string): Map<string, string> => {
+type SplitBody = {
+    sections: Map<string, string>
+    // 最初の ## の見出しより前の行
+    preamble: string
+    // ## のほかの深さの見出し
+    other_headings: string[]
+    // 2 回書いた欄の名前
+    duplicates: string[]
+}
+
+// ## の見出しで本文を欄に分ける。コードブロックの中の行は見出しとして扱わない
+const splitSections = (body: string): SplitBody => {
     const sections = new Map<string, string>()
+    const other_headings: string[] = []
+    const duplicates: string[] = []
+    let preamble = ""
     let current: string | undefined
+    let in_fence = false
     for (const line of stripComments(body).split(/\r?\n/)) {
-        const heading = line.match(/^##\s+(.+?)\s*$/)
-        if (heading?.[1] !== undefined) {
-            current = heading[1]
+        if (/^\s*```/.test(line)) {
+            in_fence = !in_fence
+        }
+        const heading = in_fence ? null : line.match(/^(#{1,6})\s+(.+?)\s*#*\s*$/)
+        if (heading?.[1] === "##" && heading[2] !== undefined) {
+            current = heading[2]
+            if (sections.has(current)) {
+                duplicates.push(current)
+            }
             sections.set(current, "")
+        } else if (heading?.[2] !== undefined) {
+            other_headings.push(line.trim())
         } else if (current !== undefined) {
             sections.set(current, `${sections.get(current) ?? ""}${line}\n`)
+        } else {
+            preamble += `${line}\n`
         }
     }
-    return sections
+    return { sections, preamble, other_headings, duplicates }
+}
+
+// 欄の中で、字下げしていない行のうち line_pattern に合わないものを返す。空行とコードブロックの中は問わない
+const topLevelLinesNotMatching = (text: string, line_pattern: RegExp): string[] => {
+    const lines: string[] = []
+    let in_fence = false
+    for (const line of text.split("\n")) {
+        if (/^\s*```/.test(line)) {
+            in_fence = !in_fence
+            continue
+        }
+        if (in_fence || line.trim() === "" || /^\s/.test(line)) {
+            continue
+        }
+        if (!line_pattern.test(line)) {
+            lines.push(line)
+        }
+    }
+    return lines
 }
 
 // 必須の欄がそろっているか、決めた順に並んでいるか、タスクリストがあるかを検査する
 const checkSections = (body: string, rules: BodyRules): string[] => {
-    const sections = splitSections(body)
+    const { sections, preamble, other_headings, duplicates } = splitSections(body)
     const errors = rules.sections
         .filter((name) => (sections.get(name) ?? "").trim() === "")
         .map((name) => `「${name}」の欄を書く`)
@@ -267,13 +314,32 @@ const checkSections = (body: string, rules: BodyRules): string[] => {
     if (positions.some((position, index) => index > 0 && position < (positions[index - 1] ?? 0))) {
         errors.push(`欄は ${order.join("、")} の順に書く`)
     }
-    if (!/^\s*- \[[ xX]\] \S/m.test(sections.get(rules.task_list_section) ?? "")) {
-        errors.push(`「${rules.task_list_section}」は - [ ] のタスクリストで書く`)
+    const task_list = sections.get(rules.task_list_section) ?? ""
+    if (!/^\s*- \[[ xX]\] \S/m.test(task_list) || topLevelLinesNotMatching(task_list, /^- \[[ xX]\] \S/).length > 0) {
+        errors.push(`「${rules.task_list_section}」は、すべての行を - [ ] のタスクリストで書く`)
     }
     for (const name of rules.list_sections ?? []) {
-        const first_line = (sections.get(name) ?? "").split("\n").find((line) => line.trim() !== "")
-        if (first_line !== undefined && !/^- \S/.test(first_line)) {
-            errors.push(`「${name}」は最初の行から - の箇条書きで書く`)
+        if (topLevelLinesNotMatching(sections.get(name) ?? "", /^- \S/).length > 0) {
+            errors.push(`「${name}」は、すべての行を - の箇条書きで書く`)
+        }
+    }
+    if (rules.forbid_unknown_sections) {
+        const unknown = [...sections.keys()].filter((name) => !order.includes(name))
+        if (unknown.length > 0) {
+            errors.push(`決まっていない欄を書かない: ${unknown.join("、")}。欄は ${order.join("、")} だけにする`)
+        }
+        if (other_headings.length > 0) {
+            errors.push(`見出しは ## だけを使う: ${other_headings.join("、")}`)
+        }
+        if (duplicates.length > 0) {
+            errors.push(`同じ欄を 2 回書かない: ${[...new Set(duplicates)].join("、")}`)
+        }
+    }
+    if (rules.forbid_preamble) {
+        // 署名の行を除き、最初の見出しより前に文があれば止める
+        const signature = new RegExp(rules.signature.pattern, "u")
+        if (preamble.split("\n").some((line) => line.trim() !== "" && !signature.test(line))) {
+            errors.push("署名と最初の見出しの間に文を書かない")
         }
     }
     return errors
