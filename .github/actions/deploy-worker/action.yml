@@ -1,0 +1,119 @@
+name: deploy-worker
+description: bot の Worker を 1 つの組織にデプロイする
+
+# このリポジトリの deploy と、ほかの組織のリポジトリから呼ぶ。
+# 再利用 workflow では呼んだ側の Environment の secret を読めないので、composite action にしている。
+# 呼んだ側は自分の job で Environment を指定し、その variable と secret を入力として渡す。README を参照する
+inputs:
+    ref:
+        description: デプロイする philtzjp/organizer-bot のコミット
+        default: main
+    cloudflare-api-token:
+        description: Workers の Editor の権限を持つ Cloudflare の token
+        required: true
+    cloudflare-account-id:
+        description: Worker を置く Cloudflare のアカウントの ID
+        required: true
+    worker-domain:
+        description: webhook を受けるドメイン。空なら workers.dev の URL で受ける
+        default: ""
+    organization:
+        description: 組織の login
+        required: true
+    bot-login:
+        description: App の slug
+        required: true
+    bot-user-id:
+        description: bot のユーザーの ID
+        required: true
+    conventions-repository:
+        description: 規約の正本のリポジトリ
+        required: true
+    checker-repository:
+        description: 検査器のリポジトリ
+        required: true
+    skills-repository:
+        description: conventions スキルを置くリポジトリ。空なら写さない
+        default: ""
+    profile-repository:
+        description: 統計の画像を置くリポジトリ。空なら統計のグラフを作らない
+        default: ""
+    stats-excluded-repositories:
+        description: 統計から外すリポジトリの名前。カンマで区切る
+        default: ""
+
+runs:
+    using: composite
+    steps:
+        - name: デプロイに要る値があることを確かめる
+          shell: bash
+          env:
+              CLOUDFLARE_API_TOKEN: ${{ inputs.cloudflare-api-token }}
+              CLOUDFLARE_ACCOUNT_ID: ${{ inputs.cloudflare-account-id }}
+              ORGANIZATION: ${{ inputs.organization }}
+              BOT_LOGIN: ${{ inputs.bot-login }}
+              BOT_USER_ID: ${{ inputs.bot-user-id }}
+              CONVENTIONS_REPOSITORY: ${{ inputs.conventions-repository }}
+              CHECKER_REPOSITORY: ${{ inputs.checker-repository }}
+          run: |
+              missing=""
+              for name in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID ORGANIZATION BOT_LOGIN BOT_USER_ID CONVENTIONS_REPOSITORY CHECKER_REPOSITORY; do
+                  eval "value=\${$name}"
+                  [ -z "$value" ] && missing="$missing $name"
+              done
+              if [ -n "$missing" ]; then
+                  echo "Environment に次の値がありません:$missing"
+                  exit 1
+              fi
+        # 呼んだ側のリポジトリの中身と混ざらないよう、別のディレクトリに取り出す
+        - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+          with:
+              repository: philtzjp/organizer-bot
+              ref: ${{ inputs.ref }}
+              path: .organizer-bot
+              persist-credentials: false
+        - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+          with:
+              package_json_file: .organizer-bot/package.json
+        - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+          with:
+              node-version-file: .organizer-bot/.node-version
+              cache: pnpm
+              cache-dependency-path: .organizer-bot/pnpm-lock.yaml
+        - shell: bash
+          working-directory: .organizer-bot
+          run: pnpm install --frozen-lockfile
+        - shell: bash
+          working-directory: .organizer-bot
+          run: pnpm exec turbo run typecheck test --filter @philtz/organizer-bot
+        - name: Worker をデプロイする
+          shell: bash
+          working-directory: .organizer-bot/apps/organizer-bot
+          env:
+              CLOUDFLARE_API_TOKEN: ${{ inputs.cloudflare-api-token }}
+              CLOUDFLARE_ACCOUNT_ID: ${{ inputs.cloudflare-account-id }}
+              WORKER_DOMAIN: ${{ inputs.worker-domain }}
+              ORGANIZATION: ${{ inputs.organization }}
+              BOT_LOGIN: ${{ inputs.bot-login }}
+              BOT_USER_ID: ${{ inputs.bot-user-id }}
+              CONVENTIONS_REPOSITORY: ${{ inputs.conventions-repository }}
+              CHECKER_REPOSITORY: ${{ inputs.checker-repository }}
+              SKILLS_REPOSITORY: ${{ inputs.skills-repository }}
+              PROFILE_REPOSITORY: ${{ inputs.profile-repository }}
+              STATS_EXCLUDED_REPOSITORIES: ${{ inputs.stats-excluded-repositories }}
+          # WORKER_DOMAIN がなければ、workers.dev の URL で受ける
+          run: |
+              domain=()
+              if [ -n "$WORKER_DOMAIN" ]; then
+                  domain=(--domain "$WORKER_DOMAIN")
+              fi
+              pnpm exec wrangler deploy \
+                  "${domain[@]}" \
+                  --var "ORGANIZATION:$ORGANIZATION" \
+                  --var "BOT_LOGIN:$BOT_LOGIN" \
+                  --var "BOT_USER_ID:$BOT_USER_ID" \
+                  --var "CONVENTIONS_REPOSITORY:$CONVENTIONS_REPOSITORY" \
+                  --var "CHECKER_REPOSITORY:$CHECKER_REPOSITORY" \
+                  --var "SKILLS_REPOSITORY:$SKILLS_REPOSITORY" \
+                  --var "PROFILE_REPOSITORY:$PROFILE_REPOSITORY" \
+                  --var "STATS_EXCLUDED_REPOSITORIES:$STATS_EXCLUDED_REPOSITORIES"
