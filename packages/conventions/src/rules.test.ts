@@ -160,12 +160,44 @@ describe("Issue", () => {
 
     it("背景の最初の行が箇条書きでないものを止める", () => {
         const errors = checkIssue(conventions, "docs(docs): 命名規則を追加する", issue_body.replace("- 理由を書く。", "理由を書く。"))
-        assert.ok(errors.includes("「背景」は最初の行から - の箇条書きで書く"))
+        assert.ok(errors.includes("「背景」は、すべての行を - の箇条書きで書く"))
     })
 
-    it("背景は 2 行目以降が地の文でも、最初の行が箇条書きなら通す", () => {
-        const body = issue_body.replace("- 理由を書く。", "- 理由を書く。\n\n補足の文。")
+    it("背景の 2 行目以降に地の文があるものを止める", () => {
+        const errors = checkIssue(conventions, "docs(docs): 命名規則を追加する", issue_body.replace("- 理由を書く。", "- 理由を書く。\n\n補足の文。"))
+        assert.ok(errors.includes("「背景」は、すべての行を - の箇条書きで書く"))
+    })
+
+    it("作業範囲も箇条書きでないものを止める", () => {
+        const errors = checkIssue(conventions, "docs(docs): 命名規則を追加する", issue_body.replace("- やること", "やること"))
+        assert.ok(errors.includes("「作業範囲」は、すべての行を - の箇条書きで書く"))
+    })
+
+    it("字下げした子の項目、続きの行、コードブロックは通す", () => {
+        const body = issue_body.replace("- やること", "- やること\n  - 子の項目\n  続きの行\n\n```sh\npnpm run skills\n```")
         assert.deepEqual(checkIssue(conventions, "docs(docs): 命名規則を追加する", body), [])
+    })
+
+    it("受け入れ条件にタスクリストでない行があるものを止める", () => {
+        const errors = checkIssue(conventions, "docs(docs): 命名規則を追加する", issue_body.replace("- [ ] 条件", "- [ ] 条件\n- 補足"))
+        assert.ok(errors.includes("「受け入れ条件」は、すべての行を - [ ] のタスクリストで書く"))
+    })
+
+    it("決まっていない欄と、## のほかの見出しと、同じ欄の 2 回目を止める", () => {
+        const errors = checkIssue(conventions, "docs(docs): 命名規則を追加する", `${issue_body}\n\n## 概要\n\n- 何か\n\n### 小見出し\n\n## 備考\n\n- また`)
+        assert.ok(errors.some((error) => error.startsWith("決まっていない欄を書かない: 概要")))
+        assert.ok(errors.some((error) => error.startsWith("見出しは ## だけを使う")))
+        assert.ok(errors.includes("同じ欄を 2 回書かない: 備考"))
+    })
+
+    it("コードブロックの中の # は見出しとして扱わない", () => {
+        const body = issue_body.replace("- やること", "- やること\n\n```sh\n# コメント\n## コメント\n```")
+        assert.deepEqual(checkIssue(conventions, "docs(docs): 命名規則を追加する", body), [])
+    })
+
+    it("署名と最初の見出しの間の文を止める", () => {
+        const errors = checkIssue(conventions, "docs(docs): 命名規則を追加する", issue_body.replace("✳︎ Anthropic Claude Opus 5.5\n", "✳︎ Anthropic Claude Opus 5.5\n\n前置きの文。\n"))
+        assert.ok(errors.includes("署名と最初の見出しの間に文を書かない"))
     })
 
     it("タイトルの形を止める", () => {
@@ -182,6 +214,11 @@ describe("PR", () => {
 
     it("影響範囲・残リスクの欄がないものを止める", () => {
         assert.ok(checkPullRequest(conventions, "docs(docs): 命名規則を追加する", issue_body).length > 0)
+    })
+
+    it("影響範囲・残リスクに地の文があるものを止める", () => {
+        const errors = checkPullRequest(conventions, "docs(docs): 命名規則を追加する", pull_request_body.replace("- 影響範囲: なし", "影響範囲はない。"))
+        assert.ok(errors.includes("「影響範囲・残リスク」は、すべての行を - の箇条書きで書く"))
     })
 
     it("Issue を自動で閉じるキーワードを止める", () => {
