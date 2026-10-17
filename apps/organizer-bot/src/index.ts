@@ -182,10 +182,10 @@ const updateProfileStats = async (env: Env): Promise<void> => {
     console.log(result.status === "committed" ? `統計のグラフを ${result.sha} で更新した: ${result.changed.join(", ")}` : "統計のグラフは変わっていない")
 }
 
-// cron の式。wrangler.jsonc の triggers.crons と同じにする。どちらも日本時間の 0 時
-// 統計は全リポジトリを読み、変われば組織のプロフィールのリポジトリにコミットするので週に 1 回にする
-export const stats_cron = "0 15 * * SUN"
-// conventions スキルの写しはマージのときにも動くので、cron は取りこぼしの保険。軽いので毎日にする
+// cron の式。wrangler.jsonc の triggers.crons と同じにする。式は UTC で書く
+// 統計は毎日、日本時間の 7 時 30 分に作り直す。グラフが変わったときだけ組織のプロフィールのリポジトリにコミットする
+export const stats_cron = "30 22 * * *"
+// conventions スキルの写しはマージのときにも動くので、cron は取りこぼしの保険。軽いので毎日、日本時間の 0 時にする
 export const skill_cron = "0 15 * * *"
 
 // 置き場所のリポジトリを渡されていない処理は動かさない。スキルのリポジトリやプロフィールのリポジトリを持たない組織があるため

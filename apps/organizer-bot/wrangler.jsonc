@@ -8,10 +8,10 @@
     // アカウントは環境変数 CLOUDFLARE_ACCOUNT_ID で、受け口のドメインは wrangler deploy の --domain で渡す。ドメインを渡さなければ workers.dev で受ける。
     // 組織に固有の値はコードに書かず、デプロイの workflow が Actions の variable から渡す
     "workers_dev": true,
-    // 日本時間の 0 時に動く。毎週月曜は org のプロフィールの統計のグラフを作り直し、毎日 conventions スキルを写し直す。
+    // 毎日、日本時間の 7 時 30 分に org のプロフィールの統計のグラフを作り直し、0 時に conventions スキルを写し直す。
     // 式は src/index.ts の stats_cron と skill_cron と同じにする
     "triggers": {
-        "crons": ["0 15 * * SUN", "0 15 * * *"]
+        "crons": ["30 22 * * *", "0 15 * * *"]
     },
     "observability": {
         "enabled": true
