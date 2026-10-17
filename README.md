@@ -93,14 +93,26 @@ pnpm --filter @philtz/organizer-bot exec wrangler secret put GH_WEBHOOK_SECRET
 
 ### 4. デプロイの値
 
-このリポジトリの組織ごとの Environment に、次を入れます。main に Worker か検査器の変更が入ると、`deploy` の workflow が Environment ごとにデプロイします。
+デプロイの手順は、`workflow_call` で呼べる `deploy-worker` の workflow にあります。呼んだ側のリポジトリの Environment から値を読むので、組織の鍵はその組織のリポジトリに置きます。ほかの組織の鍵をこのリポジトリに置かないでください。
 
-| Environment | 組織 | App |
-|---|---|---|
-| `cloudflare` | philtzjp | philtz-organizer-bot |
-| `cloudflare-osaxyz` | osaxyz | osaxyz-organizer-bot |
+| 組織 | App | 呼ぶリポジトリ | Environment |
+|---|---|---|---|
+| philtzjp | philtz-organizer-bot | philtzjp/organizer-bot の `deploy` | `cloudflare` |
+| osaxyz | osaxyz-organizer-bot | osaxyz/organizer-bot | `cloudflare` |
 
-組織を足すときは、Environment を足し、`deploy` の workflow の `matrix.environment` に名前を足します。
+philtzjp の分は、main に Worker か検査器の変更が入ると `deploy` がデプロイします。
+
+組織を足すときは、その組織にリポジトリと Environment を作り、そのリポジトリの workflow から次のように呼びます。`ref` を省くと main をデプロイします。
+
+```yaml
+jobs:
+    deploy:
+        uses: philtzjp/organizer-bot/.github/workflows/deploy-worker.yml@main
+        with:
+            environment: cloudflare
+```
+
+Environment には次を入れます。
 
 | 種類 | 名前 | 値 |
 |---|---|---|
