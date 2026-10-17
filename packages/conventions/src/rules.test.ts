@@ -141,6 +141,11 @@ describe("Issue", () => {
         assert.deepEqual(checkIssue(conventions, "docs(docs): 命名規則を追加する", issue_body), [])
     })
 
+    it("bot が書く、-bot で終わる名前だけの署名を通す", () => {
+        assert.deepEqual(checkIssue(conventions, "docs(docs): 命名規則を追加する", issue_body.replace("✳︎ Anthropic Claude Opus 5.5", "✳︎ philtz-organizer-bot")), [])
+        assert.ok(checkIssue(conventions, "docs(docs): 命名規則を追加する", issue_body.replace("✳︎ Anthropic Claude Opus 5.5", "✳︎ claude")).length > 0)
+    })
+
     it("署名がないものを止める", () => {
         assert.ok(checkIssue(conventions, "docs(docs): 命名規則を追加する", issue_body.split("\n").slice(2).join("\n")).length > 0)
     })
