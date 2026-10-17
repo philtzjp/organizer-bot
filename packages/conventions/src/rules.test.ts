@@ -216,6 +216,11 @@ describe("PR", () => {
         assert.ok(checkPullRequest(conventions, "docs(docs): 命名規則を追加する", issue_body).length > 0)
     })
 
+    it("最後の欄のあとのフッターは、欄の地の文として数えない", () => {
+        const errors = checkPullRequest(conventions, "docs(docs): 命名規則を追加する", pull_request_body.replace("\n\n## 備考\n\n- 補足", "") + "\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)")
+        assert.deepEqual(errors, ["Claude Code のフッターを書かない"])
+    })
+
     it("影響範囲・残リスクに地の文があるものを止める", () => {
         const errors = checkPullRequest(conventions, "docs(docs): 命名規則を追加する", pull_request_body.replace("- 影響範囲: なし", "影響範囲はない。"))
         assert.ok(errors.includes("「影響範囲・残リスク」は、すべての行を - の箇条書きで書く"))
