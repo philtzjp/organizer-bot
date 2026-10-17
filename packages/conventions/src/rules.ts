@@ -351,7 +351,8 @@ const checkBody = (conventions: Conventions, rules: BodyRules, title: string, bo
         errors.push(...checkSubject(conventions, title, false).map((error) => `タイトル: ${error}`))
     }
     const signature = splitSignature(rules.signature, body)
-    return [...errors, ...signature.errors, ...checkSections(body, rules), ...checkText(conventions, body), ...checkFooters(conventions, body)]
+    // フッターは checkFooters が伝え、bot が取り除くので、欄の検査ではフッターを除いた本文を見る
+    return [...errors, ...signature.errors, ...checkSections(stripFooters(conventions, body).body, rules), ...checkText(conventions, body), ...checkFooters(conventions, body)]
 }
 
 export const checkIssue = (conventions: Conventions, title: string, body: string): string[] =>
