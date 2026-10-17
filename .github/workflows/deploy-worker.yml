@@ -20,6 +20,10 @@ on:
                 description: デプロイする philtzjp/organizer-bot のコミット
                 type: string
                 default: main
+        # 宣言しないと、job の Environment の secret も空になる。呼んだ側は渡さなくてよく、Environment の secret が使われる
+        secrets:
+            CLOUDFLARE_API_TOKEN:
+                required: false
 
 permissions:
     contents: read
