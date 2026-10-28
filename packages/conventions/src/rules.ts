@@ -67,9 +67,15 @@ export type Conventions = {
     }
     footers: { name: string, pattern: string }[]
     deleted_bot_comments: string[]
+    // 書いた人によらず、本文が形に当たれば丸ごと消すコメント。pattern はコメントの本文全体に当てる正規表現
+    deleted_comments?: { name: string, pattern: string }[]
 }
 
 export const loadConventions = (path: string): Conventions => parse(readFileSync(path, "utf8")) as Conventions
+
+// コメントの本文が deleted_comments のどれかに当たれば、その名前を返す。当たらなければ undefined を返す
+export const findDeletedComment = (conventions: Conventions, body: string): string | undefined =>
+    (conventions.deleted_comments ?? []).find((entry) => new RegExp(entry.pattern, "u").test(body))?.name
 
 // © や ™ のような記号は文中で使うので絵文字として扱わない
 const emoji_pattern = /(?![©®™])\p{Extended_Pictographic}/u
