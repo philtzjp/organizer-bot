@@ -1,4 +1,4 @@
-import { stripFooters } from "@philtz/conventions/rules"
+import { findDeletedComment, stripFooters } from "@philtz/conventions/rules"
 import { readConventions } from "./conventions.ts"
 import { expectOk, type GitHubRequest } from "./github.ts"
 
@@ -15,16 +15,16 @@ export type FooterTarget = {
 
 export type FooterResult = "unchanged" | "stripped" | "deleted"
 
-// ツールのフッターを本文から取り除く。消すと決めた bot のコメントは丸ごと消す。
+// ツールのフッターを本文から取り除く。消すと決めた bot のコメントと、規約の deleted_comments の形に当たるコメントは丸ごと消す。
 // 書き換えると edited のイベントがもう一度届くが、そのときはフッターがないので何もしない
 export const cleanFooters = async (request: GitHubRequest, target: FooterTarget): Promise<FooterResult> => {
     const full_name = `${target.owner}/${target.repository}`
     const conventions = await readConventions(request, full_name)
-    if (target.kind === "comment" && conventions.deleted_bot_comments.includes(target.author)) {
+    if (target.kind === "comment" && (conventions.deleted_bot_comments.includes(target.author) || findDeletedComment(conventions, target.body) !== undefined)) {
         const response = await request("DELETE", `/repos/${full_name}/issues/comments/${target.id}`)
         // すでに消えているときは 404 になる
         if (response.status !== 404) {
-            expectOk(response, "bot のコメントを消す")
+            expectOk(response, "コメントを消す")
         }
         return "deleted"
     }

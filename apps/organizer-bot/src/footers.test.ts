@@ -48,6 +48,41 @@ describe("cleanFooters", () => {
         assert.ok(!fake.calls.some((call) => call.method === "PATCH"))
     })
 
+    it("閉じるときのコメントは、書いた人によらず丸ごと消す", async () => {
+        for (const text of [
+            "#118 の作り直しで、apps/bench を捨てたため閉じます。",
+            `${body.replace("理由を書く。", "- #2 がマージされたので、この Issue を閉じます")}\n\n## 作業範囲\n\n- 結果を書く`,
+            "受け入れ条件をすべて満たしたので閉じる。数字の差し替えは #187。",
+            "Closing this issue as completed.",
+        ]) {
+            const fake = createFakeGitHub()
+            const result = await cleanFooters(fake.request, { ...base, kind: "comment", id: 7, author: "alice", body: text })
+            assert.equal(result, "deleted", text)
+            assert.deepEqual(fake.calls.at(-1), { method: "DELETE", path: `${repo}/issues/comments/7`, body: undefined })
+        }
+    })
+
+    it("閉じることに触れただけのコメントは消さない", async () => {
+        for (const text of [
+            "- 差分に前の名前と閉じたウィンドウを書くようにした",
+            "- 閉じたときに未達だった、前後の時間の比較を行った",
+            "- [ ] 次のリポジトリを作ったときに確かめて閉じる",
+            "子の Issue がすべて閉じた。",
+        ]) {
+            const fake = createFakeGitHub()
+            const result = await cleanFooters(fake.request, { ...base, kind: "comment", id: 7, author: "alice", body: text })
+            assert.equal(result, "unchanged", text)
+            assert.ok(!fake.calls.some((call) => call.method === "DELETE"), text)
+        }
+    })
+
+    it("Issue と PR の本文は、閉じるときの形に当たっても消さない", async () => {
+        const fake = createFakeGitHub()
+        const result = await cleanFooters(fake.request, { ...base, kind: "issue", id: 3, author: "alice", body: "重複なので閉じます。" })
+        assert.equal(result, "unchanged")
+        assert.ok(!fake.calls.some((call) => call.method === "DELETE"))
+    })
+
     it("vercel[bot] のコメントは丸ごと消す", async () => {
         const fake = createFakeGitHub()
         const result = await cleanFooters(fake.request, { ...base, kind: "comment", id: 42, author: "vercel[bot]", body: "[vc]: #abc" })
