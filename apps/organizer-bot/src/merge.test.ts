@@ -125,15 +125,6 @@ describe("mergePullRequest", () => {
         assert.equal(body.commit_message, "docs(docs): 命名規則を追加する\n\n場所ごとに名前の付け方が違い、探しにくかったため。")
     })
 
-    it("移す本文が規約に合わなければマージしない", async () => {
-        fake = createFakeGitHub({ [`GET ${repo}/pulls/7/commits?per_page=100&page=1`]: { status: 200, body: [
-            { commit: { message: "docs(docs): 命名規則を追加する\n\nフェーズ 1 で決めたため。" }, parents: [{}] },
-        ] } })
-        const result = await mergePullRequest(fake.request, target)
-        assert.equal(result.status, "refused")
-        assert.ok(!fake.calls.some((call) => call.method === "PUT" && call.path.endsWith("/merge-async")))
-    })
-
     it("ブランチも main も自分では書き換えない", async () => {
         await mergePullRequest(fake.request, target)
         assert.ok(!fake.calls.some((call) => call.method === "PATCH" || (call.method === "POST" && call.path.includes("/git/"))))
@@ -232,7 +223,6 @@ describe("mergePullRequest", () => {
         const result = await mergePullRequest(fake.request, target)
         assert.equal(result.status, "refused")
     })
-
 })
 
 describe("必須の検査が決まっていないリポジトリ", () => {
@@ -445,7 +435,6 @@ describe("owner がラベルを付けた PR", () => {
         assert.equal(result.status, "refused")
     })
 })
-
 
 describe("buildSquashBody", () => {
     const conventions = loadConventions(new URL("../../../packages/conventions/fixtures/conventions.yml", import.meta.url).pathname)

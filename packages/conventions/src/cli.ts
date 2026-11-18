@@ -137,8 +137,7 @@ type PullRequest = { number: number, title: string, body: string | null }
 type Issue = { number: number, title: string, body: string | null, pull_request?: unknown }
 type PushEvent = { ref?: string, deleted?: boolean, commits?: { id: string }[] }
 
-// PR の途中のコミットは squash で main に残らないので、タイトルと本文だけを検査する。
-// 途中のコミットの本文は bot が squash の本文に移し、マージする前に検査する
+// PR の途中のコミットは squash で main に残らないので、タイトルと本文だけを検査する
 const checkPullRequestEvent = (pull_request: PullRequest): boolean => report(
     checkPullRequest(conventions, pull_request.title, pull_request.body ?? ""),
     `PR #${pull_request.number} のタイトルと本文`,

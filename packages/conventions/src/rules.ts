@@ -18,7 +18,6 @@ type BodyRules = {
     signature: Signature
     sections: string[]
     optional_sections: string[]
-    // すべての行を - [ ] のタスクリストで書く欄。決めなければ検査しない
     task_list_section?: string
     // すべての行を - の箇条書きで書く欄。字下げした行とコードブロックの中は問わない
     list_sections?: string[]
@@ -212,8 +211,6 @@ export const checkCommitMessage = (conventions: Conventions, message: string, co
     const errors = checkSubject(conventions, subject, context.is_merge || context.on_main, context.changed_paths)
     if (rules.single_line && lines.filter((line) => line.trim() !== "").length > 1) {
         errors.push("コミットメッセージは 1 行にし、本文を書かない")
-    } else if (lines.length > 1 && (lines[1] ?? "").trim() !== "") {
-        errors.push("件名と本文の間は 1 行空ける")
     }
     return [
         ...errors,

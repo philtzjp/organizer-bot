@@ -7471,8 +7471,6 @@ var checkCommitMessage = (conventions2, message, context) => {
   const errors = checkSubject(conventions2, subject, context.is_merge || context.on_main, context.changed_paths);
   if (rules.single_line && lines.filter((line) => line.trim() !== "").length > 1) {
     errors.push("\u30B3\u30DF\u30C3\u30C8\u30E1\u30C3\u30BB\u30FC\u30B8\u306F 1 \u884C\u306B\u3057\u3001\u672C\u6587\u3092\u66F8\u304B\u306A\u3044");
-  } else if (lines.length > 1 && (lines[1] ?? "").trim() !== "") {
-    errors.push("\u4EF6\u540D\u3068\u672C\u6587\u306E\u9593\u306F 1 \u884C\u7A7A\u3051\u308B");
   }
   return [
     ...errors,

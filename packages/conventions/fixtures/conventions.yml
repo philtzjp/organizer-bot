@@ -16,9 +16,7 @@ commit:
     repository_scope: repo
     # 説明は日本語で書く
     require_japanese: true
-    # 本文を書いてよい。本文には、コードがそうなっていなければならない理由を書き、そうしなければならない理由がなければ書かない。
-    # 書くときは件名との間を 1 行空ける。
-    # true にすると、1 行だけにし、本文を書かない
+    # true なら 1 行だけにし、本文を書かない
     single_line: false
     # 説明に #N を書かない
     forbid_issue_numbers: true
@@ -109,7 +107,6 @@ pull_request:
         required: true
         pattern: "^✳︎ (?:\\S+ \\S.*|[a-z0-9-]+-bot)$"
         example: ✳︎ Anthropic Claude Opus 5.5
-    # 使ったモデルは先頭行の署名で表すので、欄は設けない
     sections: [背景, 作業範囲]
     optional_sections: [関連 Issue]
     list_sections: [背景, 作業範囲, 関連 Issue]

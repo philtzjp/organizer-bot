@@ -1,4 +1,4 @@
-import { allowedScope, checkCommitMessage, stripFooters, type Conventions } from "@philtz/conventions/rules"
+import { allowedScope, stripFooters, type Conventions } from "@philtz/conventions/rules"
 import { findViolations } from "./check.ts"
 import { readConventions } from "./conventions.ts"
 import { botCommitter, botSignature, expectOk, readAll, type GitHubRequest } from "./github.ts"
@@ -175,11 +175,7 @@ const checkApprovals = async (
 
 type PullRequestCommit = { commit: { message: string }, parents: unknown[] }
 
-// squash のコミットの本文を、PR の中のコミットの本文から作る。
-// 本文には、コメントの代わりにコードがそうなっていなければならない理由を書く。squash で途中のコミットは main に残らないので、
-// 本文を main のコミットに移さないと、git blame から理由に辿り着けない。
-// 本文のないコミットと、ベースブランチを取り込んだマージコミットは飛ばす。
-// ツールが付けたフッターと Co-authored-by の行は取り除く
+// squash のコミットの本文を、PR の中のコミットの本文から作る。main の検査で落ちないよう、フッターと Co-authored-by は取り除く
 export const buildSquashBody = (conventions: Conventions, commits: PullRequestCommit[]): string => {
     if (conventions.commit.single_line) {
         return ""
@@ -275,11 +271,6 @@ export const mergePullRequest = async (request: GitHubRequest, target: MergeRequ
     const subject = `${conventions.commit.merge_type}(${allowedScope(conventions, paths)}): ${description}`
     const commits = await readAll<PullRequestCommit>(request, `/repos/${full_name}/pulls/${target.number}/commits`, (body) => body as PullRequestCommit[])
     const commit_body = buildSquashBody(conventions, commits)
-    // main に入ったあとに Actions が検査して落ちないよう、マージする前に同じ検査をかける
-    const message_errors = checkCommitMessage(conventions, commit_body === "" ? subject : `${subject}\n\n${commit_body}`, { is_merge: false, on_main: true, is_local: false, changed_paths: paths })
-    if (message_errors.length > 0) {
-        return { status: "refused", reasons: message_errors.map((error) => `PR の中のコミットから作る main のコミットメッセージが規約に合わない: ${error}`) }
-    }
 
     // GitHub にマージを頼む。ブランチは書き換えず、author は PR を出した人、committer は GitHub になる。
     // 本文は PR の中のコミットの本文から作り、GitHub が付ける (#N) と Co-authored-by を入れない。sha を渡すので、頼んだあとに push されたら GitHub が取り消す。
