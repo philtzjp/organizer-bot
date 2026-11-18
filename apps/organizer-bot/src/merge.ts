@@ -1,4 +1,4 @@
-import { allowedScope, stripFooters, type Conventions } from "@philtz/conventions/rules"
+import { allowedScope } from "@philtz/conventions/rules"
 import { findViolations } from "./check.ts"
 import { readConventions } from "./conventions.ts"
 import { botCommitter, botSignature, expectOk, readAll, type GitHubRequest } from "./github.ts"
@@ -173,32 +173,6 @@ const checkApprovals = async (
     return approvals >= required ? [] : [`承認が ${required} 件要るが、${approvals} 件しかない`]
 }
 
-type PullRequestCommit = { commit: { message: string }, parents: unknown[] }
-
-// squash のコミットの本文を、PR の中のコミットの本文から作る。main の検査で落ちないよう、フッターと Co-authored-by は取り除く
-export const buildSquashBody = (conventions: Conventions, commits: PullRequestCommit[]): string => {
-    if (conventions.commit.single_line) {
-        return ""
-    }
-    const sections: string[] = []
-    for (const entry of commits) {
-        if (entry.parents.length > 1) {
-            continue
-        }
-        const [subject = "", ...rest] = entry.commit.message.replace(/\r\n/g, "\n").split("\n")
-        const body = stripFooters(conventions, rest.join("\n")).body
-            .split("\n")
-            .filter((line) => !/^\s*co-authored-by:/i.test(line))
-            .join("\n")
-            .replace(/\n{3,}/g, "\n\n")
-            .trim()
-        if (body !== "") {
-            sections.push(`${subject.trim()}\n\n${body}`)
-        }
-    }
-    return sections.join("\n\n")
-}
-
 // 件名の説明の部分を PR のタイトルから取り出す。タイトルは type(scope): 説明 の形
 const readDescription = (title: string): string | undefined => title.match(/^[a-z]+(\([^)]*\))?: (.+)$/)?.[2]
 
@@ -269,17 +243,15 @@ export const mergePullRequest = async (request: GitHubRequest, target: MergeRequ
     const files = await readAll<{ filename: string, previous_filename?: string }>(request, `/repos/${full_name}/pulls/${target.number}/files`, (body) => body as { filename: string }[])
     const paths = files.flatMap((file) => file.previous_filename === undefined ? [file.filename] : [file.filename, file.previous_filename])
     const subject = `${conventions.commit.merge_type}(${allowedScope(conventions, paths)}): ${description}`
-    const commits = await readAll<PullRequestCommit>(request, `/repos/${full_name}/pulls/${target.number}/commits`, (body) => body as PullRequestCommit[])
-    const commit_body = buildSquashBody(conventions, commits)
 
     // GitHub にマージを頼む。ブランチは書き換えず、author は PR を出した人、committer は GitHub になる。
-    // 本文は PR の中のコミットの本文から作り、GitHub が付ける (#N) と Co-authored-by を入れない。sha を渡すので、頼んだあとに push されたら GitHub が取り消す。
+    // 本文は空にし、GitHub が付ける (#N) と Co-authored-by を入れない。sha を渡すので、頼んだあとに push されたら GitHub が取り消す。
     // bot はデフォルトブランチの ruleset の例外に入っているので、ruleset はすり抜ける。必須の検査と承認は、上で bot が確かめた
     const response = await request("PUT", `/repos/${full_name}/pulls/${target.number}/merge-async`, {
         merge_method: "squash",
         merge_action: "direct_merge",
         commit_title: subject,
-        commit_message: commit_body,
+        commit_message: "",
         sha: head_sha,
         bypass_rules: true,
     })

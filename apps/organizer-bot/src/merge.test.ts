@@ -3,8 +3,7 @@ import { readFileSync } from "node:fs"
 import { beforeEach, describe, it } from "node:test"
 import type { GitHubRequest, GitHubResponse } from "./github.ts"
 import { isMergedWithLabel, type WebhookEvent } from "./index.ts"
-import { loadConventions } from "@philtz/conventions/rules"
-import { buildSquashBody, deleteRefusals, mergePullRequest, reportRefusal, waitForMerge } from "./merge.ts"
+import { deleteRefusals, mergePullRequest, reportRefusal, waitForMerge } from "./merge.ts"
 
 const conventions_yml = readFileSync(new URL("../../../packages/conventions/fixtures/conventions.yml", import.meta.url), "utf8")
 const repo = "/repos/example-org/app"
@@ -55,9 +54,6 @@ const createFakeGitHub = (overrides: Record<string, GitHubResponse> = {}): { req
             { filename: "docs/naming.md" },
             { filename: "docs/setup.md" },
         ] },
-        [`GET ${repo}/pulls/7/commits?per_page=100&page=1`]: { status: 200, body: [
-            { commit: { message: "docs(docs): 命名規則を追加する" }, parents: [{}] },
-        ] },
         [`GET ${repo}/contents/.github/conventions.yml`]: { status: 200, body: conventions_yml },
         ["GET /orgs/example-org/memberships/bob"]: { status: 200, body: { role: "member", state: "active" } },
         ["GET /orgs/example-org/memberships/alice"]: { status: 200, body: { role: "admin", state: "active" } },
@@ -106,23 +102,13 @@ describe("mergePullRequest", () => {
         })
     })
 
-    it("件名に #N も Co-authored-by も付けず、本文のないコミットだけなら本文を空にする", async () => {
+    it("件名に #N も Co-authored-by も付けず、本文を空にする", async () => {
         await mergePullRequest(fake.request, target)
         const requested = fake.calls.find((call) => call.method === "PUT" && call.path.endsWith("/merge-async"))
         const body = requested?.body as { commit_title: string, commit_message: string }
         assert.ok(!/#\d+/.test(body.commit_title))
         assert.ok(!/co-authored-by/i.test(body.commit_title))
         assert.equal(body.commit_message, "")
-    })
-
-    it("PR の中のコミットに書いた理由を、squash の本文に移す", async () => {
-        fake = createFakeGitHub({ [`GET ${repo}/pulls/7/commits?per_page=100&page=1`]: { status: 200, body: [
-            { commit: { message: "docs(docs): 命名規則を追加する\n\n場所ごとに名前の付け方が違い、探しにくかったため。" }, parents: [{}] },
-        ] } })
-        await mergePullRequest(fake.request, target)
-        const requested = fake.calls.find((call) => call.method === "PUT" && call.path.endsWith("/merge-async"))
-        const body = requested?.body as { commit_message: string }
-        assert.equal(body.commit_message, "docs(docs): 命名規則を追加する\n\n場所ごとに名前の付け方が違い、探しにくかったため。")
     })
 
     it("ブランチも main も自分では書き換えない", async () => {
@@ -223,6 +209,7 @@ describe("mergePullRequest", () => {
         const result = await mergePullRequest(fake.request, target)
         assert.equal(result.status, "refused")
     })
+
 })
 
 describe("必須の検査が決まっていないリポジトリ", () => {
@@ -436,40 +423,3 @@ describe("owner がラベルを付けた PR", () => {
     })
 })
 
-describe("buildSquashBody", () => {
-    const conventions = loadConventions(new URL("../../../packages/conventions/fixtures/conventions.yml", import.meta.url).pathname)
-    const commit = (message: string, parents = 1): { commit: { message: string }, parents: unknown[] } => ({ commit: { message }, parents: Array.from({ length: parents }, () => ({})) })
-
-    it("本文のあるコミットだけを、件名と本文の組にして並べる", () => {
-        const body = buildSquashBody(conventions, [
-            commit("feat(api): 再試行を足す\n\n上流の API が 1 秒以内の連続呼び出しを 429 で落とすため。"),
-            commit("test(api): 再試行の試験を足す"),
-            commit("fix(api): 待ち時間を延ばす\n\n429 の Retry-After が最短 2 秒だったため。"),
-        ])
-        assert.equal(body, [
-            "feat(api): 再試行を足す",
-            "",
-            "上流の API が 1 秒以内の連続呼び出しを 429 で落とすため。",
-            "",
-            "fix(api): 待ち時間を延ばす",
-            "",
-            "429 の Retry-After が最短 2 秒だったため。",
-        ].join("\n"))
-    })
-
-    it("ベースブランチを取り込んだマージコミットを飛ばす", () => {
-        assert.equal(buildSquashBody(conventions, [commit("Merge branch 'main' into feat/1-x\n\nConflicts:\n\ta.ts", 2)]), "")
-    })
-
-    it("Co-authored-by とツールのフッターを取り除く", () => {
-        const body = buildSquashBody(conventions, [
-            commit("feat(api): 再試行を足す\n\n上流が 429 を返すため。\n\nCo-authored-by: someone <a@example.com>\nClaude-Session: https://claude.ai/code/session_abc"),
-        ])
-        assert.equal(body, "feat(api): 再試行を足す\n\n上流が 429 を返すため。")
-    })
-
-    it("single_line のリポジトリでは本文を空にする", () => {
-        const single_line = { ...conventions, commit: { ...conventions.commit, single_line: true } }
-        assert.equal(buildSquashBody(single_line, [commit("feat(api): 再試行を足す\n\n上流が 429 を返すため。")]), "")
-    })
-})
