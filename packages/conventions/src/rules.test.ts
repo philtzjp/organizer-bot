@@ -52,8 +52,22 @@ describe("コミットメッセージ", () => {
         assert.ok(commit("docs(docs): フェーズ 1 の命名規則を追加する").length > 0)
     })
 
-    it("2 行以上を止める", () => {
-        assert.ok(commit("docs(docs): 命名規則を追加する\n\n本文").length > 0)
+    it("件名の次の行を空けた本文を通す", () => {
+        assert.deepEqual(commit("docs(docs): 命名規則を追加する\n\n場所ごとに名前の付け方が違い、探しにくかったため。"), [])
+    })
+
+    it("件名の次の行に続けて書いた本文を止める", () => {
+        assert.deepEqual(commit("docs(docs): 命名規則を追加する\n場所ごとに名前の付け方が違ったため。"), ["件名と本文の間は 1 行空ける"])
+    })
+
+    it("single_line のリポジトリでは 2 行以上を止める", () => {
+        const single_line = { ...conventions, commit: { ...conventions.commit, single_line: true } }
+        const errors = checkCommitMessage(single_line, "docs(docs): 命名規則を追加する\n\n本文", { is_merge: false, on_main: false, is_local: false })
+        assert.deepEqual(errors, ["コミットメッセージは 1 行にし、本文を書かない"])
+    })
+
+    it("本文の禁止語も止める", () => {
+        assert.ok(commit("docs(docs): 命名規則を追加する\n\nフェーズ 1 で決めたため。").length > 0)
     })
 
     it("Co-Authored-By を止める", () => {

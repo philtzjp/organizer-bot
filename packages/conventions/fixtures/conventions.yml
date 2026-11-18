@@ -16,8 +16,9 @@ commit:
     repository_scope: repo
     # 説明は日本語で書く
     require_japanese: true
-    # 1 行だけにし、本文を書かない
-    single_line: true
+    # 本文を書いてよい。書くときは件名との間を 1 行空け、なぜそう変えたかを書く。
+    # true にすると、1 行だけにし、本文を書かない
+    single_line: false
     # 説明に #N を書かない
     forbid_issue_numbers: true
     # 説明にカッコを書かない
