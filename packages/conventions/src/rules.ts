@@ -18,7 +18,7 @@ type BodyRules = {
     signature: Signature
     sections: string[]
     optional_sections: string[]
-    task_list_section: string
+    task_list_section?: string
     // すべての行を - の箇条書きで書く欄。字下げした行とコードブロックの中は問わない
     list_sections?: string[]
     // 決めた欄のほかの見出しと、## のほかの深さの見出しを書かない
@@ -320,9 +320,11 @@ const checkSections = (body: string, rules: BodyRules): string[] => {
     if (positions.some((position, index) => index > 0 && position < (positions[index - 1] ?? 0))) {
         errors.push(`欄は ${order.join("、")} の順に書く`)
     }
-    const task_list = sections.get(rules.task_list_section) ?? ""
-    if (!/^\s*- \[[ xX]\] \S/m.test(task_list) || topLevelLinesNotMatching(task_list, /^- \[[ xX]\] \S/).length > 0) {
-        errors.push(`「${rules.task_list_section}」は、すべての行を - [ ] のタスクリストで書く`)
+    if (rules.task_list_section !== undefined) {
+        const task_list = sections.get(rules.task_list_section) ?? ""
+        if (!/^\s*- \[[ xX]\] \S/m.test(task_list) || topLevelLinesNotMatching(task_list, /^- \[[ xX]\] \S/).length > 0) {
+            errors.push(`「${rules.task_list_section}」は、すべての行を - [ ] のタスクリストで書く`)
+        }
     }
     for (const name of rules.list_sections ?? []) {
         if (topLevelLinesNotMatching(sections.get(name) ?? "", /^- \S/).length > 0) {
