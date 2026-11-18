@@ -224,25 +224,50 @@ describe("Issue", () => {
     })
 })
 
-const pull_request_body = issue_body.replace("## 備考", "## 影響範囲・残リスク\n\n- 影響範囲: なし\n\n## 備考")
+const pull_request_body = [
+    "✳︎ Anthropic Claude Opus 5.5",
+    "",
+    "## 背景",
+    "",
+    "- 理由を書く。",
+    "",
+    "## 作業範囲",
+    "",
+    "- やったこと",
+    "",
+    "## 関連 Issue",
+    "",
+    "- #2",
+].join("\n")
 
 describe("PR", () => {
     it("テンプレートどおりの本文を通す", () => {
         assert.deepEqual(checkPullRequest(conventions, "docs(docs): 命名規則を追加する", pull_request_body), [])
     })
 
-    it("影響範囲・残リスクの欄がないものを止める", () => {
-        assert.ok(checkPullRequest(conventions, "docs(docs): 命名規則を追加する", issue_body).length > 0)
+    it("関連 Issue の欄はなくてもよい", () => {
+        assert.deepEqual(checkPullRequest(conventions, "docs(docs): 命名規則を追加する", pull_request_body.replace("\n\n## 関連 Issue\n\n- #2", "")), [])
+    })
+
+    it("受け入れ条件や影響範囲・残リスクの欄を止める", () => {
+        const errors = checkPullRequest(conventions, "docs(docs): 命名規則を追加する", pull_request_body.replace("## 関連 Issue", "## 受け入れ条件\n\n- [ ] 条件\n\n## 影響範囲・残リスク\n\n- なし\n\n## 関連 Issue"))
+        assert.ok(errors.some((error) => error.startsWith("決まっていない欄を書かない: 受け入れ条件、影響範囲・残リスク")))
+    })
+
+    it("タスクリストの欄を決めれば、タスクリストを求める", () => {
+        const rules = { ...conventions, pull_request: { ...conventions.pull_request, task_list_section: "作業範囲" } }
+        const errors = checkPullRequest(rules, "docs(docs): 命名規則を追加する", pull_request_body)
+        assert.ok(errors.includes("「作業範囲」は、すべての行を - [ ] のタスクリストで書く"))
     })
 
     it("最後の欄のあとのフッターは、欄の地の文として数えない", () => {
-        const errors = checkPullRequest(conventions, "docs(docs): 命名規則を追加する", pull_request_body.replace("\n\n## 備考\n\n- 補足", "") + "\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)")
+        const errors = checkPullRequest(conventions, "docs(docs): 命名規則を追加する", pull_request_body + "\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)")
         assert.deepEqual(errors, ["Claude Code のフッターを書かない"])
     })
 
-    it("影響範囲・残リスクに地の文があるものを止める", () => {
-        const errors = checkPullRequest(conventions, "docs(docs): 命名規則を追加する", pull_request_body.replace("- 影響範囲: なし", "影響範囲はない。"))
-        assert.ok(errors.includes("「影響範囲・残リスク」は、すべての行を - の箇条書きで書く"))
+    it("作業範囲に地の文があるものを止める", () => {
+        const errors = checkPullRequest(conventions, "docs(docs): 命名規則を追加する", pull_request_body.replace("- やったこと", "やったこと。"))
+        assert.ok(errors.includes("「作業範囲」は、すべての行を - の箇条書きで書く"))
     })
 
     it("Issue を自動で閉じるキーワードを止める", () => {

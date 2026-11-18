@@ -108,10 +108,10 @@ pull_request:
         required: true
         pattern: "^✳︎ (?:\\S+ \\S.*|[a-z0-9-]+-bot)$"
         example: ✳︎ Anthropic Claude Opus 5.5
-    sections: [背景, 作業範囲, 受け入れ条件, 影響範囲・残リスク]
-    optional_sections: [備考]
-    task_list_section: 受け入れ条件
-    list_sections: [背景, 作業範囲, 影響範囲・残リスク]
+    # 使ったモデルは先頭行の署名で表すので、欄は設けない
+    sections: [背景, 作業範囲]
+    optional_sections: [関連 Issue]
+    list_sections: [背景, 作業範囲, 関連 Issue]
     forbid_unknown_sections: true
     forbid_preamble: true
     # Closes #N などで Issue を自動で閉じない。日本語で書くため、Issue はマージ後に手で閉じる
