@@ -176,7 +176,7 @@ const checkApprovals = async (
 type PullRequestCommit = { commit: { message: string }, parents: unknown[] }
 
 // squash のコミットの本文を、PR の中のコミットの本文から作る。
-// 本文には、コメントの代わりにコードがそうなっている理由を書く。squash で途中のコミットは main に残らないので、
+// 本文には、コメントの代わりにコードがそうなっていなければならない理由を書く。squash で途中のコミットは main に残らないので、
 // 本文を main のコミットに移さないと、git blame から理由に辿り着けない。
 // 本文のないコミットと、ベースブランチを取り込んだマージコミットは飛ばす。
 // ツールが付けたフッターと Co-authored-by の行は取り除く
